@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Scrapbox Research Helper",
+  "version": "0.1.0",
+  "description": "Calendar, outline, minutes, and project-top history helper for Scrapbox",
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["https://scrapbox.io/*"],
+      "js": ["content.js"]
+    }
+  ]
+}
