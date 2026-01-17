@@ -3,22 +3,16 @@
   if (window.__SB_EXTENSION_RUNNING__) return;
   window.__SB_EXTENSION_RUNNING__ = true;
 
-  const CAL_ID = 'sb-cal';
-  const PANEL_ID = '__sb_final_panel__';
+  const TODO_PANEL_ID = '__sb_todo_panel__';
+  const MAIN_PANEL_ID = '__sb_final_panel__';
+  const CALENDAR_ID = 'sb-cal';
 
   /* ================= 設定 ================= */
-
-  let researchNoteTimer = null;
-  let lastResearchNoteHash = null;
-  let paperIntroTimer = null;
-  let lastPaperIntroHash = null;
-  let minutesTimer = null;
-  let lastMinutesHash = null;
 
   const DEFAULT_SETTINGS = {
     userName: '',
     panelWidth: 480,
-    panelHeight: 420,
+    panelHeight: 560,
     calendarFontSize: 9,
     idleOpacity: 0.35,
     todoMark: '[_]',      // TODO を示す文字列（正規表現ではない）
@@ -36,10 +30,9 @@
   };
 
   /* ================= 共通ユーティリティ ================= */
-
   const clearUI = () => {
-    document.getElementById(CAL_ID)?.remove();
-    document.getElementById(PANEL_ID)?.remove();
+    document.getElementById(CALENDAR_ID)?.remove();
+    document.getElementById(MAIN_PANEL_ID)?.remove();
   };
 
   const jump = id => {
@@ -50,16 +43,23 @@
     a.remove();
   };
 
-  const findQuestionAuthor = (lines, startIdx) => {
-    for (let i = startIdx - 1; i >= 0; i--) {
-      const t = (lines[i].text || '').trim();
-      const m = t.match(/^\[([^\]\/]+)\.icon\]/);
-      if (m) return m[1];
+  const normalizeLines = (rawLines, { withUid = false } = {}) => {
+    return rawLines.map(l => {
+      const line = {
+        id: l.id,
+        text: (l.text || '').trim()
+      };
 
-      // セクション境界で止める
-      if (/^\[\*{2,3}\s/.test(t)) break;
-    }
-    return null;
+      if (withUid) {
+        line.uid =
+          l.userId ||
+          l.createdBy ||
+          l.updatedBy ||
+          'unknown';
+      }
+
+      return line;
+    });
   };
 
   const fetchPage = async (project, page) => {
@@ -68,18 +68,6 @@
     );
     if (!r.ok) return null;
     return r.json();
-  };
-
-  const computeLinesHash = (lines) => {
-    let h = 0;
-    for (const l of lines) {
-      const s = `${l.id}:${l.text || ''}`;
-      for (let i = 0; i < s.length; i++) {
-        h = ((h << 5) - h) + s.charCodeAt(i);
-        h |= 0; // 32bit int
-      }
-    }
-    return h;
   };
 
   const isPaperIntroPage = (lines) =>
@@ -141,9 +129,46 @@
     h.onclick = () => jump(rawLines[0].id);
 
     parent.appendChild(h);
+  };
 
-    const hr = document.createElement('hr');
-    parent.appendChild(hr);
+  const createPageWatcher = ({ interval = 10000, onUpdate }) => {
+    let timer = null;
+    let lastUpdated = null;
+
+    const stop = () => {
+      if (timer) clearInterval(timer);
+      timer = null;
+      lastUpdated = null;
+    };
+
+    const start = (project, page) => {
+      stop();
+
+      const run = async () => {
+        const json = await fetchPage(project, page);
+        if (!json) return;
+
+        if (
+          typeof json.updated === 'number' &&
+          json.updated === lastUpdated
+        ) {
+          return;
+        }
+        lastUpdated = json.updated;
+
+        onUpdate({
+          project,
+          page,
+          lines: json.lines,
+          json
+        });
+      };
+
+      run(); // 初回即時
+      timer = setInterval(run, interval);
+    };
+
+    return { start, stop };
   };
 
 
@@ -190,7 +215,7 @@
     if (!items.length) return;
 
     const h = document.createElement('div');
-    h.textContent = '⭐ よく見てるページ';
+    h.textContent = '⭐ よく見ているページ';
     h.style = 'font-weight:bold;margin:8px 0 4px';
     p.appendChild(h);
 
@@ -227,7 +252,7 @@
         const history = data.history || [];
 
         const p = document.createElement('div');
-        p.id = PANEL_ID;
+        p.id = MAIN_PANEL_ID;
         p.style = basePanelStyle;
         applyPanelSettings(p);
 
@@ -307,10 +332,10 @@
     if (!j) return;
 
     // 既に存在する場合は作らない
-    if (document.getElementById(CAL_ID)) return;
+    if (document.getElementById(CALENDAR_ID)) return;
 
     const box = document.createElement('div');
-    box.id = CAL_ID;
+    box.id = CALENDAR_ID;
     box.style =
       'position:fixed;top:10px;right:10px;width:33vw;max-width:560px;' +
       'min-width:420px;height:66vh;background:#fff;z-index:99999;' +
@@ -319,8 +344,6 @@
       'transition:opacity .2s';
 
     applyPanelSettings(box);
-
-    /* ===== ヘッダ ===== */
 
     const move = (p, d) => {
       const m = p.match(/(20\d{2})\.(\d{2})/);
@@ -373,8 +396,6 @@
       })
     );
 
-    /* ===== グリッド ===== */
-
     const grid = document.createElement('div');
     grid.className = '__sb_calendar_grid__'; // ★ 更新用フック
     grid.style =
@@ -402,7 +423,7 @@
   };
 
   const updateCalendarFromLines = (project, page, j) => {
-    const box = document.getElementById(CAL_ID);
+    const box = document.getElementById(CALENDAR_ID);
     if (!box) return;
 
     const grid = box.querySelector('.__sb_calendar_grid__');
@@ -485,41 +506,14 @@
     });
   };
 
-  const startResearchNoteWatcher = (project, page) => {
-    if (researchNoteTimer) {
-      clearInterval(researchNoteTimer);
-      researchNoteTimer = null;
-    }
-
-    const run = async () => {
-      const j = await fetchPage(project, page);
-      if (!j) return;
-
-      const hash = computeLinesHash(j.lines);
-      if (hash === lastResearchNoteHash) {
-        return; // ★ 変更なし → 何もしない
-      }
-
-      lastResearchNoteHash = hash;
-
-      // ★ 変更あり → 各ビュー更新
-      updateCalendarFromLines(project, page, j);
-      renderTodoPanel(project, page, j.lines);
-    };
-
-    run(); // 初回即時
-    researchNoteTimer = setInterval(run, 10000);
-  };
-
-
   /* ================= 実験計画書 ================= */
 
-  const renderPlan = async (project, page) => {
+  const renderExperimentPlan = async (project, page) => {
     const j = await fetchPage(project, page);
     if (!j) return;
 
     const p = document.createElement('div');
-    p.id = PANEL_ID;
+    p.id = MAIN_PANEL_ID;
     p.style = basePanelStyle;
     applyPanelSettings(p);
 
@@ -546,185 +540,110 @@
     document.body.appendChild(p);
   };
 
-  /* ================= 議事録 ================= */
+  /* ==================== 議事録など ====================== */
+  const renderMinutesFromLines = (project, page, rawLines) => {
+    const lines = normalizeLines(rawLines, { withUid: true });
 
-  const extractImportantQuestions = (rawLines) => {
-    const lines = rawLines.map(l => ({
-      id: l.id,
-      text: (l.text || '').trim()
-    }));
+    let panel = document.getElementById(MAIN_PANEL_ID);
+    let body;
 
-    const questions = [];
-    const seen = new Set();
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = MAIN_PANEL_ID;
+      panel.style = basePanelStyle;
+      applyPanelSettings(panel);
 
-    lines.forEach((l, idx) => {
-      if (/^\?\s/.test(l.text)) {
-        if (seen.has(l.id)) return;
-        seen.add(l.id);
+      const title = document.createElement('div');
+      title.id = '__sb_minutes_title__';
+      title.style =
+        'font-weight:bold;font-size:14px;cursor:pointer;margin-bottom:6px';
+      panel.appendChild(title);
 
-        questions.push({
+      panel.appendChild(document.createElement('hr'));
+
+      body = document.createElement('div');
+      body.id = '__sb_minutes_body__';
+      panel.appendChild(body);
+
+      document.body.appendChild(panel);
+    } else {
+      body = panel.querySelector('#__sb_minutes_body__');
+    }
+
+    const header = panel.querySelector('#__sb_minutes_title__');
+    header.textContent = '📌 ' + (rawLines[0]?.text || '');
+    header.onclick = () => jump(rawLines[0]?.id);
+
+    const frag = document.createDocumentFragment();
+
+    const sessions = [];
+    let cur = null;
+
+    const isTitleLine = t =>
+      (/^\[[\*\(\&]*[\(\&][\*\(\&]*\s+/.test(t) && !/^\[\*{1,2}\s/.test(t)) ||
+      /^タイトル\s*[:：『「]/.test(t);
+
+    const cleanTitle = t =>
+      t.replace(/^\[[\*\(\&]+\s*/, '')
+      .replace(/^タイトル\s*[:：『「]\s*/, '')
+      .replace(/[』」]\s*$/, '')
+      .replace(/\]\s*$/, '');
+
+    lines.forEach(l => {
+      // セッション開始（[() 系）
+      if (/^\[\(/.test(l.text)) {
+        cur = {
           id: l.id,
-          author: findQuestionAuthor(lines, idx),
-          text: l.text.replace(/^\?\s*/, '')
+          title: l.text.replace(/^\[[^\s]+\s*/, '').replace(/\]$/, ''),
+          talks: []
+        };
+        sessions.push(cur);
+        return;
+      }
+
+      // 発表タイトル行
+      if (isTitleLine(l.text)) {
+        if (!cur) {
+          cur = { id: l.id, title: '(auto)', talks: [] };
+          sessions.push(cur);
+        }
+        cur.talks.push({
+          id: l.id,
+          title: cleanTitle(l.text)
         });
       }
     });
 
-    return questions;
-  };
+    /* --- セッション描画 --- */
+    sessions.forEach(s => {
+      const h = document.createElement('div');
+      h.textContent = s.title;
+      h.style = 'font-weight:bold;margin:6px 0;cursor:pointer';
+      h.onclick = () => jump(s.id);
+      frag.appendChild(h);
 
-const renderMinutesFromLines = (project, page, rawLines) => {
-  const lines = rawLines.map(l => ({
-    id: l.id,
-    text: (l.text || '').trim(),
-    uid: l.userId || l.createdBy || l.updatedBy || 'unknown'
-  }));
-
-  /* ===== パネル取得（既存） ===== */
-  let panel = document.getElementById(PANEL_ID);
-  let body;
-
-  if (!panel) {
-    panel = document.createElement('div');
-    panel.id = PANEL_ID;
-    panel.style = basePanelStyle;
-    applyPanelSettings(panel);
-
-    const title = document.createElement('div');
-    title.id = '__sb_minutes_title__';
-    title.style =
-      'font-weight:bold;font-size:14px;cursor:pointer;margin-bottom:6px';
-    panel.appendChild(title);
-
-    panel.appendChild(document.createElement('hr'));
-
-    body = document.createElement('div');
-    body.id = '__sb_minutes_body__';
-    panel.appendChild(body);
-
-    document.body.appendChild(panel);
-  } else {
-    body = panel.querySelector('#__sb_minutes_body__');
-  }
-
-  /* ===== ヘッダ更新 ===== */
-  const header = panel.querySelector('#__sb_minutes_title__');
-  header.textContent = '📌 ' + (rawLines[0]?.text || '');
-  header.onclick = () => jump(rawLines[0]?.id);
-
-  /* ===== body 再構築 ===== */
-  const frag = document.createDocumentFragment();
-
-  /* ============================================================
-   * ★ 分岐①：発表練習（質問主導）
-   * ============================================================ */
-  if (/発表練習/.test(page)) {
-    const questions = extractImportantQuestions(rawLines);
-
-    if (questions.length) {
-      const qh = document.createElement('div');
-      qh.textContent = `❗ 重要な質問 (${questions.length})`;
-      qh.style = 'font-weight:bold;margin:6px 0;color:#c62828';
-      frag.appendChild(qh);
-
-      questions.forEach(q => {
+      s.talks.forEach(t => {
         const d = document.createElement('div');
-        d.textContent =
-          '・' + (q.author ? `${q.author}: ` : '?: ') + q.text;
-        d.style =
-          'cursor:pointer;padding-left:8px;' +
-          'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
-        d.onclick = () => jump(q.id);
+        d.textContent = '└ ' + t.title;
+        d.style = 'padding-left:14px;cursor:pointer';
+        d.onclick = () => jump(t.id);
         frag.appendChild(d);
       });
+    });
 
-      frag.appendChild(document.createElement('hr'));
-    }
+    frag.appendChild(document.createElement('hr'));
 
-    // 発表練習では「統計量」だけ最後に出す
+    /* --- 発言統計 --- */
     const { stats, idToName } = buildTalkStats(rawLines);
     const statsBox = document.createElement('div');
     renderTalkStats(statsBox, stats, idToName);
     frag.appendChild(statsBox);
 
     body.replaceChildren(frag);
-    return; // ← ★ ここで終了（重要）
-  }
-
-  /* ============================================================
-   * ★ 分岐②：議事録（セッション構造主導）
-   * ============================================================ */
-
-  const sessions = [];
-  let cur = null;
-
-  const isTitleLine = t =>
-    (/^\[[\*\(\&]*[\(\&][\*\(\&]*\s+/.test(t) && !/^\[\*{1,2}\s/.test(t)) ||
-     /^タイトル\s*[:：『「]/.test(t);
-
-  const cleanTitle = t =>
-    t.replace(/^\[[\*\(\&]+\s*/, '')
-     .replace(/^タイトル\s*[:：『「]\s*/, '')
-     .replace(/[』」]\s*$/, '')
-     .replace(/\]\s*$/, '');
-
-  lines.forEach(l => {
-    // セッション開始（[() 系）
-    if (/^\[\(/.test(l.text)) {
-      cur = {
-        id: l.id,
-        title: l.text.replace(/^\[[^\s]+\s*/, '').replace(/\]$/, ''),
-        talks: []
-      };
-      sessions.push(cur);
-      return;
-    }
-
-    // 発表タイトル行
-    if (isTitleLine(l.text)) {
-      if (!cur) {
-        cur = { id: l.id, title: '(auto)', talks: [] };
-        sessions.push(cur);
-      }
-      cur.talks.push({
-        id: l.id,
-        title: cleanTitle(l.text)
-      });
-    }
-  });
-
-  /* --- セッション描画 --- */
-  sessions.forEach(s => {
-    const h = document.createElement('div');
-    h.textContent = s.title;
-    h.style = 'font-weight:bold;margin:6px 0;cursor:pointer';
-    h.onclick = () => jump(s.id);
-    frag.appendChild(h);
-
-    s.talks.forEach(t => {
-      const d = document.createElement('div');
-      d.textContent = '└ ' + t.title;
-      d.style = 'padding-left:14px;cursor:pointer';
-      d.onclick = () => jump(t.id);
-      frag.appendChild(d);
-    });
-  });
-
-  frag.appendChild(document.createElement('hr'));
-
-  /* --- 発言統計 --- */
-  const { stats, idToName } = buildTalkStats(rawLines);
-  const statsBox = document.createElement('div');
-  renderTalkStats(statsBox, stats, idToName);
-  frag.appendChild(statsBox);
-
-  /* ===== 最後に一度だけ差し替え ===== */
-  body.replaceChildren(frag);
-};
+  };
 
 
   /* ================= TODO PANEL (stable version) ================= */
-
   const renderTodoPanel = (project, page, lines) => {
     loadSettings(s => {
       const TODOSHOW = 5;
@@ -766,15 +685,14 @@ const renderMinutesFromLines = (project, page, rawLines) => {
       });
 
       if (!todos.length) {
-        document.getElementById('__sb_todo_panel__')?.remove();
+        document.getElementById(TODO_PANEL_ID)?.remove();
         return;
       }
 
-      /* ---- パネル再生成 ---- */
-      document.getElementById('__sb_todo_panel__')?.remove();
+      document.getElementById(TODO_PANEL_ID)?.remove();
 
       const p = document.createElement('div');
-      p.id = '__sb_todo_panel__';
+      p.id = TODO_PANEL_ID;
       p.style =
         'position:fixed;top:10px;right:520px;width:320px;' +
         'max-height:60vh;overflow:auto;' +
@@ -785,7 +703,6 @@ const renderMinutesFromLines = (project, page, rawLines) => {
 
       applyPanelSettings(p);
 
-      /* ---- ヘッダ（残り / 全体） ---- */
       const activeCount = todos.filter(t => !t.done).length;
       const totalCount = todos.length;
 
@@ -799,7 +716,6 @@ const renderMinutesFromLines = (project, page, rawLines) => {
       const list = document.createElement('div');
       p.appendChild(list);
 
-      /* ---- DOM生成 ---- */
       const items = [];
 
       todos.forEach(t => {
@@ -833,7 +749,6 @@ const renderMinutesFromLines = (project, page, rawLines) => {
       const activeItems = items.filter(x => !x.done);
       const doneItems = items.filter(x => x.done);
 
-      // 初期表示：未完了 TODO のみ先頭 N 件
       activeItems.forEach((x, i) => {
         x.dom.style.display = i < TODOSHOW ? '' : 'none';
       });
@@ -841,7 +756,6 @@ const renderMinutesFromLines = (project, page, rawLines) => {
         x.dom.style.display = 'none';
       });
 
-      /* ---- 他 N 件 ---- */
       const rest = Math.max(0, activeItems.length - TODOSHOW);
       let moreLine = null;
 
@@ -853,7 +767,6 @@ const renderMinutesFromLines = (project, page, rawLines) => {
         list.appendChild(moreLine);
       }
 
-      /* ---- hover：全件表示 ---- */
       p.addEventListener('mouseenter', () => {
         items.forEach(x => {
           x.dom.style.display = '';
@@ -861,7 +774,6 @@ const renderMinutesFromLines = (project, page, rawLines) => {
         if (moreLine) moreLine.style.display = 'none';
       });
 
-      /* ---- mouseleave：初期状態に戻す ---- */
       p.addEventListener('mouseleave', () => {
         activeItems.forEach((x, i) => {
           x.dom.style.display = i < TODOSHOW ? '' : 'none';
@@ -881,9 +793,10 @@ const renderMinutesFromLines = (project, page, rawLines) => {
     const stats = {};
     const idToName = {};
 
-    rawLines.forEach(l => {
-      const text = (l.text || '').trim();
-      const uid = l.userId || l.createdBy || l.updatedBy || 'unknown';
+    const lines = normalizeLines(rawLines, { withUid: true });
+
+    lines.forEach(l => {
+      const { text, uid } = l;
 
       if (!uid || uid === 'unknown') return;
 
@@ -930,27 +843,20 @@ const renderMinutesFromLines = (project, page, rawLines) => {
 
   /* ================= 発表練習パネル =============== */
   const renderPresentationTrainingFromLines = (project, page, rawLines) => {
-    const lines = rawLines.map(l => ({
-      id: l.id,
-      text: (l.text || '').trim(),
-      uid: l.userId || l.createdBy || l.updatedBy || 'unknown'
-    }));
+    const lines = normalizeLines(rawLines);
 
-    /* ================= パネル初期化 ================= */
-
-    let panel = document.getElementById(PANEL_ID);
+    let panel = document.getElementById(MAIN_PANEL_ID);
     let body;
 
     if (!panel) {
       panel = document.createElement('div');
-      panel.id = PANEL_ID;
+      panel.id = MAIN_PANEL_ID;
       panel.style = basePanelStyle;
       applyPanelSettings(panel);
 
       const title = document.createElement('div');
       title.id = '__sb_minutes_title__';
-      title.style =
-        'font-weight:bold;font-size:14px;cursor:pointer;margin-bottom:6px';
+      title.style = 'font-weight:bold;font-size:14px;cursor:pointer;margin-bottom:6px';
       panel.appendChild(title);
 
       panel.appendChild(document.createElement('hr'));
@@ -964,8 +870,6 @@ const renderMinutesFromLines = (project, page, rawLines) => {
       body = panel.querySelector('#__sb_minutes_body__');
     }
 
-    /* ================= ページタイトル ================= */
-
     const pageTitle = lines[0]?.text || '(untitled)';
     const pageTitleId = lines[0]?.id;
 
@@ -973,7 +877,6 @@ const renderMinutesFromLines = (project, page, rawLines) => {
     titleEl.textContent = '📌 ' + pageTitle;
     if (pageTitleId) titleEl.onclick = () => jump(pageTitleId);
 
-    /* ================= セッション抽出（タイトル基準） ================= */
 
     const isTitleLine = (t) =>
       /^タイトル[:：]/.test(t) ||
@@ -1002,7 +905,6 @@ const renderMinutesFromLines = (project, page, rawLines) => {
 
     if (cur) cur.end = lines.length - 1;
 
-    /* --- フォールバック（タイトルが1つも無い） --- */
     if (sessions.length === 0) {
       sessions.push({
         id: pageTitleId,
@@ -1011,8 +913,6 @@ const renderMinutesFromLines = (project, page, rawLines) => {
         end: lines.length - 1
       });
     }
-
-    /* ================= 質問抽出（重複排除） ================= */
 
     const seenQuestions = new Set();
 
@@ -1048,54 +948,41 @@ const renderMinutesFromLines = (project, page, rawLines) => {
       return qs;
     };
 
-    /* ================= body 再構築 ================= */
-
     const frag = document.createDocumentFragment();
-    const isPractice = /発表練習/.test(page);
 
-    if (isPractice) {
-      sessions.forEach(s => {
-        const qs = extractQuestions(s);
-        if (!qs.length) return;
+    sessions.forEach(s => {
+      const qs = extractQuestions(s);
+      if (!qs.length) return;
 
-        const sh = document.createElement('div');
-        sh.textContent = `🎤 ${s.title}`;
-        sh.style = 'font-weight:bold;margin-top:8px;cursor:pointer';
-        sh.onclick = () => jump(s.id);
-        frag.appendChild(sh);
+      const sh = document.createElement('div');
+      sh.textContent = `🎤 ${s.title}`;
+      sh.style = 'font-weight:bold;margin-top:8px;cursor:pointer';
+      sh.onclick = () => jump(s.id);
+      frag.appendChild(sh);
 
-        qs.forEach(q => {
-          const d = document.createElement('div');
-          d.textContent =
-            '・' + (q.author ? `${q.author}: ` : '?: ') + q.text;
-          d.style =
-            'padding-left:12px;cursor:pointer;' +
-            'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
-          d.onclick = () => jump(q.id);
-          frag.appendChild(d);
-        });
-
-        frag.appendChild(document.createElement('hr'));
+      qs.forEach(q => {
+        const d = document.createElement('div');
+        d.textContent =
+          '・' + (q.author ? `${q.author}: ` : '?: ') + q.text;
+        d.style =
+          'padding-left:12px;cursor:pointer;' +
+          'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+        d.onclick = () => jump(q.id);
+        frag.appendChild(d);
       });
-    }
+
+      frag.appendChild(document.createElement('hr'));
+    });
 
     body.replaceChildren(frag);
   };
 
-
   /* ================= 論文紹介パネル =============== */
 
   const renderPaperPanelFromLines = (project, page, rawLines) => {
-    const lines = rawLines.map(l => ({
-      id: l.id,
-      text: (l.text || '').trim()
-    }));
-
-    /* ================= ページ判定 ================= */
+    const lines = normalizeLines(rawLines);
 
     if (!isPaperIntroPage(lines)) return;
-
-    /* ================= タイトル・セクション検出 ================= */
 
     let title = null;
     let titleId = null;
@@ -1110,8 +997,6 @@ const renderMinutesFromLines = (project, page, rawLines) => {
       if (l.text === '[*** 概要]') abstractId = l.id;
       if (l.text === '[*** 質問・コメント]') qnaId = l.id;
     });
-
-    /* ================= 質問抽出（重複排除・質問者優先） ================= */
 
     let inQnA = false;
     const questionMap = new Map(); // key -> { id, text, author }
@@ -1160,14 +1045,12 @@ const renderMinutesFromLines = (project, page, rawLines) => {
 
     const questions = Array.from(questionMap.values());
 
-    /* ================= パネル（固定・再利用） ================= */
-
-    let panel = document.getElementById(PANEL_ID);
+    let panel = document.getElementById(MAIN_PANEL_ID);
     let body;
 
     if (!panel) {
       panel = document.createElement('div');
-      panel.id = PANEL_ID;
+      panel.id = MAIN_PANEL_ID;
       panel.style = basePanelStyle + 'width:520px;max-height:80vh;';
       applyPanelSettings(panel);
 
@@ -1196,8 +1079,6 @@ const renderMinutesFromLines = (project, page, rawLines) => {
       body = panel.querySelector('#__sb_paper_body__');
     }
 
-    /* ================= header 更新 ================= */
-
     const h = panel.querySelector('#__sb_paper_title__');
     h.textContent = '📄 ' + title;
     if (titleId) h.onclick = () => jump(titleId);
@@ -1216,8 +1097,6 @@ const renderMinutesFromLines = (project, page, rawLines) => {
 
     addJump('🔎 概要へ', abstractId);
     addJump('💬 質問・コメントへ', qnaId);
-
-    /* ================= body 更新（1回差し替え） ================= */
 
     const frag = document.createDocumentFragment();
 
@@ -1242,135 +1121,113 @@ const renderMinutesFromLines = (project, page, rawLines) => {
     body.replaceChildren(frag);
   };
 
-  const startPaperIntroWatcher = (project, page) => {
-    if (paperIntroTimer) {
-      clearInterval(paperIntroTimer);
-      paperIntroTimer = null;
+  /* =============== Watcher ========================= */
+  const paperIntroWatcher = createPageWatcher({
+    onUpdate: ({ project, page, lines }) => {
+      if (!isPaperIntroPage(lines)) return;
+      renderPaperPanelFromLines(project, page, lines);
     }
+  });
 
-    const run = async () => {
-      const j = await fetchPage(project, page);
-      if (!j) return;
-
-      // 念のため：論文紹介ページでなければ何もしない
-      if (!isPaperIntroPage(j.lines)) return;
-
-      const hash = computeLinesHash(j.lines);
-      if (hash === lastPaperIntroHash) {
-        return; // ★ 変更なし
-      }
-
-      lastPaperIntroHash = hash;
-      renderPaperPanelFromLines(project, page, j.lines);
-    };
-
-    run(); // 初回即時
-    paperIntroTimer = setInterval(run, 10000);
-  };
-
-  const startMinutesWatcher = (project, page) => {
-    if (minutesTimer) {
-      clearInterval(minutesTimer);
-      minutesTimer = null;
+  const researchNoteWatcher = createPageWatcher({
+    onUpdate: ({ project, page, lines, json }) => {
+      updateCalendarFromLines(project, page, json);
+      renderTodoPanel(project, page, lines);
     }
+  });
 
-    const run = async () => {
-      const j = await fetchPage(project, page);
-      if (!j) return;
-
-      const hash = computeLinesHash(j.lines);
-      if (hash === lastMinutesHash) return;
-
-      lastMinutesHash = hash;
-
-      // ★ DOM保持で更新
-      if(/発表練習/.test(page)){
-        renderPresentationTrainingFromLines(project, page, j.lines);
+  const minutesWatcher = createPageWatcher({
+    onUpdate: ({ project, page, lines }) => {
+      if (/発表練習/.test(page)) {
+        renderPresentationTrainingFromLines(project, page, lines);
       } else {
-        renderMinutesFromLines(project, page, j.lines);
+        renderMinutesFromLines(project, page, lines);
       }
-    };
+    }
+  });
 
-    run(); // 初回即時
-    minutesTimer = setInterval(run, 10000);
+  /* ================= SPA用 =================== */
+  const classifyPage = (page, lines) => {
+    if (!page) return 'project-top';
+    if (/研究ノート/.test(page)) return 'research-note';
+    if (/実験計画書/.test(page)) return 'experiment-plan';
+    if (/発表練習/.test(page)) return 'presentation-training';
+    if (isPaperIntroPage(lines)) return 'paper-intro';
+    return 'minutes';
   };
+
+  const stopAllWatchers = () => {
+    researchNoteWatcher?.stop();
+    paperIntroWatcher?.stop();
+    minutesWatcher?.stop();
+  };
+
   /* ================= SPA監視 ================= */
 
-  const renderPaperOrMinutes = async (project, page) => {
-    const j = await fetchPage(project, page);
-    if (!j) return;
-
-    if (isPaperIntroPage(j.lines)) {
-      renderPaperPanelFromLines(project, page, j.lines);
-    } else {
-      if(/発表練習/.test(page)){
-        renderPresentationTrainingFromLines(project, page, j.lines);
-      } else {
-        renderMinutesFromLines(project, page, j.lines);
-      }
-    }
-  };
-
   let lastKey = null;
-  const tick = () => {
+  const tick = async () => {
     const key = location.pathname + location.hash;
     if (key === lastKey) return;
     lastKey = key;
 
     clearUI();
+    stopAllWatchers();
 
     const m = location.pathname.match(/^\/([^/]+)(?:\/(.*))?$/);
     if (!m) return;
 
     const project = m[1];
     const pageRaw = m[2];
-    const page = pageRaw && pageRaw.length > 0 ? decodeURIComponent(pageRaw) : null;
+    const page =
+      pageRaw && pageRaw.length > 0
+        ? decodeURIComponent(pageRaw)
+        : null;
 
     saveHistory(project, page);
-    
-    if (researchNoteTimer) {
-      clearInterval(researchNoteTimer);
-      researchNoteTimer = null;
-    }
 
-    if (paperIntroTimer) {
-      clearInterval(paperIntroTimer);
-      paperIntroTimer = null;
-      lastPaperIntroHash = null;
-    }
-
-    if (minutesTimer) {
-      clearInterval(minutesTimer);
-      minutesTimer = null;
-      lastMinutesHash = null;
-    }
-
-
+    /* ==================
+    * ページなし：プロジェクトトップ
+    * ================== */
     if (!page) {
       renderProjectTop(project);
-
-    } else if (/研究ノート/.test(page)) {
-      renderCalendar(project, page); // 初回DOM生成のみ
-      startResearchNoteWatcher(project, page);
-
-    } else if (/実験計画書/.test(page)) {
-      renderPlan(project, page);
-
-    } else {
-      // デフォルトは「中身を見てから判断」
-      renderPaperOrMinutes(project, page);
-
-      fetchPage(project, page).then(j => {
-        if (!j) return;
-
-        if (isPaperIntroPage(j.lines)) {
-          startPaperIntroWatcher(project, page);
-        } else {
-          startMinutesWatcher(project, page);
-        }
-      });
+      return;
     }
 
+    /* ==================
+    * ページあり：中身を見る
+    * ================== */
+    const json = await fetchPage(project, page);
+    if (!json) return;
+
+    const lines = normalizeLines(json.lines);
+    const type = classifyPage(page, lines);
+
+    switch (type) {
+
+      case 'research-note':
+        renderCalendar(project, page);
+        researchNoteWatcher.start(project, page);
+        break;
+
+      case 'experiment-plan':
+        renderExperimentPlan(project, page);
+        break;
+
+      case 'paper-intro':
+        renderPaperPanelFromLines(project, page, lines);
+        paperIntroWatcher.start(project, page);
+        break;
+
+      case 'presentation-training':
+        renderPresentationTrainingFromLines(project, page, lines);
+        minutesWatcher.start(project, page);
+        break;
+
+      case 'minutes':
+        renderMinutesFromLines(project, page, lines);
+        minutesWatcher.start(project, page);
+        break;
+    }
   };
 
   setInterval(tick, 600);
