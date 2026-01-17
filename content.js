@@ -8,7 +8,12 @@
 
   /* ================= 設定 ================= */
 
-  let todoTimer = null; 
+  let researchNoteTimer = null;
+  let lastResearchNoteHash = null;
+  let paperIntroTimer = null;
+  let lastPaperIntroHash = null;
+  let minutesTimer = null;
+  let lastMinutesHash = null;
 
   const DEFAULT_SETTINGS = {
     userName: '',
@@ -53,6 +58,18 @@
     return r.json();
   };
 
+  const computeLinesHash = (lines) => {
+    let h = 0;
+    for (const l of lines) {
+      const s = `${l.id}:${l.text || ''}`;
+      for (let i = 0; i < s.length; i++) {
+        h = ((h << 5) - h) + s.charCodeAt(i);
+        h |= 0; // 32bit int
+      }
+    }
+    return h;
+  };
+
   const isPaperIntroPage = (lines) =>
     lines.some(l => (l.text || '').includes('#論文紹介関連'));
 
@@ -64,7 +81,6 @@
     'overflow:auto;transition:opacity .2s';
 
   const appendLink = (p, label, project, page, prefix = '•') => {
-  //const appendLink = (p, label, project, page, prefix = '• ') => {
     const d = document.createElement('div');
     d.textContent = prefix + label;
     d.style = 'cursor:pointer;padding-left:6px';
@@ -278,55 +294,9 @@
     const j = await fetchPage(project, page);
     if (!j) return;
 
-    const move = (p, d) => {
-      const m = p.match(/(20\d{2})\.(\d{2})/);
-      if (!m) return null;
-      let y = +m[1], mo = +m[2] + d;
-      if (mo === 0) { y--; mo = 12; }
-      if (mo === 13) { y++; mo = 1; }
-      return p.replace(
-        /20\d{2}\.\d{2}/,
-        `${y}.${String(mo).padStart(2, '0')}`
-      );
-    };
+    // 既に存在する場合は作らない
+    if (document.getElementById(CAL_ID)) return;
 
-    const todayPage = p => {
-      const n = new Date();
-      return p.replace(
-        /20\d{2}\.\d{2}/,
-        `${n.getFullYear()}.${String(n.getMonth() + 1).padStart(2, '0')}`
-      );
-    };
-
-    /* --- 日付 → 行ID & スニペット抽出 --- */
-    const days = {}, snip = {};
-    let cur = null;
-
-    for (const l of j.lines) {
-      let t = (l.text || '').trim();
-      const mm = t.match(/^\[\*\(\s*(20\d{2})\.(\d{2})\.(\d{2})/);
-      if (mm) {
-        cur = `${mm[1]}.${mm[2]}.${mm[3]}`;
-        days[cur] = l.id;
-        snip[cur] = [];
-        continue;
-      }
-      t = t.replace(/\[[^\]]+\.icon\]/g, '').trim();
-      if (
-        cur &&
-        t &&
-        !t.startsWith('#') &&
-        !t.startsWith('>') &&
-        !t.startsWith('[https://') &&
-        !t.startsWith('[[https://') &&
-        !t.startsWith('[| ') &&
-        snip[cur].length < 6
-      ) {
-        snip[cur].push(t);
-      }
-    }
-
-    /* --- パネル --- */
     const box = document.createElement('div');
     box.id = CAL_ID;
     box.style =
@@ -335,25 +305,28 @@
       'border:1px solid #ccc;box-shadow:0 2px 10px rgba(0,0,0,.25);' +
       'display:flex;flex-direction:column;font-size:12px;' +
       'transition:opacity .2s';
+
     applyPanelSettings(box);
 
-    setTimeout(() => {
-      loadSettings(s => {
-        const panelH = s.panelHeight;
-        const headerH = head.offsetHeight;
-        const weekdayH = 16; // Sun–Sat 行（固定）
-        const padding = 12;  // grid padding 合計ざっくり
+    /* ===== ヘッダ ===== */
 
-        const cellH = Math.floor(
-          (panelH - headerH - weekdayH - padding) / 6
-        );
+    const move = (p, d) => {
+      const m = p.match(/(20\d{2})\.(\d{2})/);
+      if (!m) return null;
+      let y = +m[1], mo = +m[2] + d;
+      if (mo === 0) { y--; mo = 12; }
+      if (mo === 13) { y++; mo = 1; }
+      return p.replace(/20\d{2}\.\d{2}/, `${y}.${String(mo).padStart(2,'0')}`);
+    };
 
-        grid.style.gridTemplateRows =
-          `auto repeat(6, ${cellH}px)`;
-      });
-    }, 0);
+    const todayPage = p => {
+      const n = new Date();
+      return p.replace(
+        /20\d{2}\.\d{2}/,
+        `${n.getFullYear()}.${String(n.getMonth() + 1).padStart(2,'0')}`
+      );
+    };
 
-    /* --- ヘッダ（月移動） --- */
     const ym = page.match(/(20\d{2})\.(\d{2})/);
 
     const head = document.createElement('div');
@@ -388,8 +361,10 @@
       })
     );
 
-    /* --- グリッド --- */
+    /* ===== グリッド ===== */
+
     const grid = document.createElement('div');
+    grid.className = '__sb_calendar_grid__'; // ★ 更新用フック
     grid.style =
       'flex:1;padding:6px;display:grid;' +
       'grid-template-columns:repeat(7,1fr);' +
@@ -407,15 +382,63 @@
       grid.appendChild(h);
     });
 
+    box.append(head, grid);
+    document.body.appendChild(box);
+
+    // 初回描画
+    updateCalendarFromLines(project, page, j);
+  };
+
+  const updateCalendarFromLines = (project, page, j) => {
+    const box = document.getElementById(CAL_ID);
+    if (!box) return;
+
+    const grid = box.querySelector('.__sb_calendar_grid__');
+    if (!grid) return;
+
+    // 曜日行（7個）だけ残す
+    while (grid.children.length > 7) {
+      grid.removeChild(grid.lastChild);
+    }
+
+    const days = {}, snip = {};
+    let cur = null;
+
+    for (const l of j.lines) {
+      let t = (l.text || '').trim();
+      const mm = t.match(/^\[\*\(\s*(20\d{2})\.(\d{2})\.(\d{2})/);
+      if (mm) {
+        cur = `${mm[1]}.${mm[2]}.${mm[3]}`;
+        days[cur] = l.id;
+        snip[cur] = [];
+        continue;
+      }
+      t = t.replace(/\[[^\]]+\.icon\]/g, '').trim();
+      if (
+        cur &&
+        t &&
+        !t.startsWith('#') &&
+        !t.startsWith('>') &&
+        !t.startsWith('[https://') &&
+        !t.startsWith('[[https://') &&
+        !t.startsWith('[| ') &&
+        snip[cur].length < 6
+      ) {
+        snip[cur].push(t);
+      }
+    }
+
     const today = (() => {
       const d = new Date();
-      return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;
+      return `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;
     })();
 
     const ds = Object.keys(days).sort();
     if (ds.length) {
       const f = new Date(ds[0].replace(/\./g, '-')).getDay();
-      for (let i = 0; i < f; i++) grid.appendChild(document.createElement('div'));
+      for (let i = 0; i < f; i++) {
+        grid.appendChild(document.createElement('div'));
+      }
     }
 
     ds.forEach(d => {
@@ -423,6 +446,7 @@
       c.style =
         'border:1px solid #ddd;padding:2px;cursor:pointer;' +
         'display:flex;flex-direction:column;gap:1px;overflow:hidden';
+
       if (d === today) c.style.background = 'rgba(0,200,0,0.18)';
 
       const dd = document.createElement('div');
@@ -447,13 +471,34 @@
       c.onclick = () => jump(days[d]);
       grid.appendChild(c);
     });
-
-    box.append(head, grid);
-    
-    document.body.appendChild(box);
-
-    renderTodoPanel(project, page, j.lines);
   };
+
+  const startResearchNoteWatcher = (project, page) => {
+    if (researchNoteTimer) {
+      clearInterval(researchNoteTimer);
+      researchNoteTimer = null;
+    }
+
+    const run = async () => {
+      const j = await fetchPage(project, page);
+      if (!j) return;
+
+      const hash = computeLinesHash(j.lines);
+      if (hash === lastResearchNoteHash) {
+        return; // ★ 変更なし → 何もしない
+      }
+
+      lastResearchNoteHash = hash;
+
+      // ★ 変更あり → 各ビュー更新
+      updateCalendarFromLines(project, page, j);
+      renderTodoPanel(project, page, j.lines);
+    };
+
+    run(); // 初回即時
+    researchNoteTimer = setInterval(run, 10000);
+  };
+
 
   /* ================= 実験計画書 ================= */
 
@@ -491,6 +536,31 @@
 
   /* ================= 議事録 ================= */
 
+  const extractImportantQuestions = (rawLines) => {
+    const lines = rawLines.map(l => ({
+      id: l.id,
+      text: (l.text || '').trim()
+    }));
+
+    const questions = [];
+    const seen = new Set();
+
+    lines.forEach((l, idx) => {
+      if (/^\?\s/.test(l.text)) {
+        if (seen.has(l.id)) return;
+        seen.add(l.id);
+
+        questions.push({
+          id: l.id,
+          author: findQuestionAuthor(lines, idx),
+          text: l.text.replace(/^\?\s*/, '')
+        });
+      }
+    });
+
+    return questions;
+  };
+
   const renderMinutesFromLines = (project, page, rawLines) => {
     const lines = rawLines.map(l => ({
       id: l.id,
@@ -498,101 +568,186 @@
       uid: l.userId || l.createdBy || l.updatedBy || 'unknown'
     }));
 
-    const isValidUserId = uid =>
-      uid && uid !== '-' && uid !== 'unknown';
+    /* ================= パネル初期化 ================= */
 
-    const idToName = {};
-    lines.forEach(l => {
-      const m = l.text.match(/^\[([^\]\/]+)\.icon\]/);
-      if (m && isValidUserId(l.uid)) {
-        idToName[l.uid] = m[1];
-      }
-    });
+    let panel = document.getElementById(PANEL_ID);
+    let body;
 
-    /* ===== セッション構造抽出 ===== */
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = PANEL_ID;
+      panel.style = basePanelStyle;
+      applyPanelSettings(panel);
+
+      const title = document.createElement('div');
+      title.id = '__sb_minutes_title__';
+      title.style =
+        'font-weight:bold;font-size:14px;cursor:pointer;margin-bottom:6px';
+      panel.appendChild(title);
+
+      panel.appendChild(document.createElement('hr'));
+
+      body = document.createElement('div');
+      body.id = '__sb_minutes_body__';
+      panel.appendChild(body);
+
+      document.body.appendChild(panel);
+    } else {
+      body = panel.querySelector('#__sb_minutes_body__');
+    }
+
+    /* ================= ページタイトル ================= */
+
+    const pageTitle = lines[0]?.text || '(untitled)';
+    const pageTitleId = lines[0]?.id;
+
+    const titleEl = panel.querySelector('#__sb_minutes_title__');
+    titleEl.textContent = '📌 ' + pageTitle;
+    if (pageTitleId) titleEl.onclick = () => jump(pageTitleId);
+
+    /* ================= セッション抽出（タイトル基準） ================= */
+
+    const isTitleLine = (t) =>
+      /^タイトル[:：]/.test(t) ||
+      /^タイトル[「『].+[」』]$/.test(t);
 
     const sessions = [];
     let cur = null;
 
-    const isTitleLine = t =>
-      (/^\[[\*\(\&]*[\(\&][\*\(\&]*\s+/.test(t) && !/^\[\*{1,2}\s/.test(t)) ||
-      /^タイトル\s*[:：『「]/.test(t);
+    lines.forEach((l, idx) => {
+      if (isTitleLine(l.text)) {
+        if (cur) cur.end = idx - 1;
 
-    const cleanTitle = t =>
-      t.replace(/^\[[\*\(\&]+\s*/, '')
-      .replace(/^タイトル\s*[:：『「]\s*/, '')
-      .replace(/[』」]\s*$/, '')
-      .replace(/\]\s*$/, '');
+        const m =
+          l.text.match(/^タイトル[:：]\s*(.+)$/) ||
+          l.text.match(/^タイトル[「『](.+)[」』]$/);
 
-    lines.forEach(l => {
-      if (/^\[\(/.test(l.text)) {
         cur = {
           id: l.id,
-          title: l.text.replace(/^\[[^\s]+\s*/, '').replace(/\]$/, ''),
-          talks: []
+          title: m ? m[1] : l.text,
+          start: idx + 1, // ★ タイトル行の下から
+          end: null
         };
         sessions.push(cur);
-        return;
-      }
-
-      if (isTitleLine(l.text)) {
-        if (!cur) {
-          cur = { id: l.id, title: '(auto)', talks: [] };
-          sessions.push(cur);
-        }
-        cur.talks.push({ id: l.id, title: cleanTitle(l.text) });
       }
     });
 
-    /* ===== パネル ===== */
+    if (cur) cur.end = lines.length - 1;
 
-    const p = document.createElement('div');
-    p.id = PANEL_ID;
-    p.style = basePanelStyle;
-    applyPanelSettings(p);
-
-    renderPageTitle(p, rawLines);
-
-    sessions.forEach(s => {
-      const h = document.createElement('div');
-      h.textContent = s.title;
-      h.style = 'font-weight:bold;margin:6px 0;cursor:pointer';
-      h.onclick = () => jump(s.id);
-      p.appendChild(h);
-
-      s.talks.forEach(t => {
-        const d = document.createElement('div');
-        d.textContent = '└ ' + t.title;
-        d.style = 'padding-left:14px;cursor:pointer';
-        d.onclick = () => jump(t.id);
-        p.appendChild(d);
+    /* --- フォールバック（タイトルが1つも無い） --- */
+    if (sessions.length === 0) {
+      sessions.push({
+        id: pageTitleId,
+        title: pageTitle,
+        start: 0,
+        end: lines.length - 1
       });
-    });
+    }
 
-    p.appendChild(document.createElement('hr'));
+    /* ================= 質問抽出（重複排除） ================= */
 
-    /* ===== 統計（共通ロジック） ===== */
+    const seenQuestions = new Set();
 
-    const { stats, idToName: nameMap } = buildTalkStats(rawLines);
-    renderTalkStats(p, stats, nameMap);
+    const extractQuestions = (session) => {
+      const qs = [];
 
-    document.body.appendChild(p);
+      for (let i = session.start; i <= session.end; i++) {
+        const t = lines[i].text;
+        if (!/^\?\s/.test(t)) continue;
+
+        const text = t.replace(/^\?\s*/, '').trim();
+        const key = text.replace(/\s+/g, ' ');
+
+        if (seenQuestions.has(key)) continue;
+        seenQuestions.add(key);
+
+        let author = null;
+        for (let j = i - 1; j >= session.start; j--) {
+          const m = lines[j].text.match(/^\[([^\]\/]+)\.icon\]/);
+          if (m) {
+            author = m[1];
+            break;
+          }
+        }
+
+        qs.push({
+          id: lines[i].id,
+          author,
+          text
+        });
+      }
+
+      return qs;
+    };
+
+    /* ================= body 再構築 ================= */
+
+    const frag = document.createDocumentFragment();
+    const isPractice = /発表練習/.test(page);
+
+    if (isPractice) {
+      sessions.forEach(s => {
+        const qs = extractQuestions(s);
+        if (!qs.length) return;
+
+        const sh = document.createElement('div');
+        sh.textContent = `🎤 ${s.title}`;
+        sh.style = 'font-weight:bold;margin-top:8px;cursor:pointer';
+        sh.onclick = () => jump(s.id);
+        frag.appendChild(sh);
+
+        qs.forEach(q => {
+          const d = document.createElement('div');
+          d.textContent =
+            '・' + (q.author ? `${q.author}: ` : '?: ') + q.text;
+          d.style =
+            'padding-left:12px;cursor:pointer;' +
+            'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+          d.onclick = () => jump(q.id);
+          frag.appendChild(d);
+        });
+
+        frag.appendChild(document.createElement('hr'));
+      });
+    }
+
+    body.replaceChildren(frag);
   };
 
-  /* ================= TODO LIST ================= */
 
-  const startTodoWatcher = (project, page) => {
-    if (todoTimer) clearInterval(todoTimer);
+  const startMinutesWatcher = (project, page) => {
+    if (minutesTimer) {
+      clearInterval(minutesTimer);
+      minutesTimer = null;
+    }
 
     const run = async () => {
       const j = await fetchPage(project, page);
       if (!j) return;
 
-      renderTodoPanel(project, page, j.lines);
+      const hash = computeLinesHash(j.lines);
+      if (hash === lastMinutesHash) return;
+
+      lastMinutesHash = hash;
+
+      // ★ DOM保持で更新
+      renderMinutesFromLines(project, page, j.lines);
     };
 
-    run(); // 初回即実行
-    todoTimer = setInterval(run, 10000);
+    run(); // 初回即時
+    minutesTimer = setInterval(run, 10000);
+  };
+
+  const findQuestionAuthor = (lines, qIndex) => {
+    for (let i = qIndex - 1; i >= 0; i--) {
+      const t = (lines[i].text || '').trim();
+
+      const m = t.match(/^\[([^\]\/]+)\.icon\]/);
+      if (m) return m[1];
+
+      if (/^\[\*{2,3}\s/.test(t)) break;
+    }
+    return null;
   };
 
   /* ================= TODO PANEL (stable version) ================= */
@@ -800,11 +955,9 @@
       });
   };
 
-
   /* ================= 論文紹介パネル =============== */
 
   const renderPaperPanelFromLines = (project, page, rawLines) => {
-    // ===== 前処理 =====
     const lines = rawLines.map(l => ({
       id: l.id,
       text: (l.text || '').trim()
@@ -815,130 +968,171 @@
     let abstractId = null;
     let qnaId = null;
 
-    const questions = [];
-    const seenQuestionIds = new Set();
-
-    // 質問・コメントセクション判定
     let inQnASection = false;
 
-    // ===== ヘルパー：質問者探索 =====
+    /* ================= 質問者探索 ================= */
+
     const findQuestionAuthor = (idx) => {
       for (let i = idx - 1; i >= 0; i--) {
         const t = lines[i].text;
-
-        // icon 行
         const m = t.match(/^\[([^\]\/]+)\.icon\]/);
         if (m) return m[1];
-
-        // セクション見出しまで来たら打ち切り
         if (/^\[\*{2,3}\s/.test(t)) break;
       }
       return null;
     };
 
-    // ===== 1パス解析 =====
+    /* ================= 質問抽出（重複排除） ================= */
+
+    const questionMap = new Map(); // key -> question
+
     lines.forEach((l, idx) => {
       const t = l.text;
 
-      // タイトル（最初の非 [] 行）
-      if (!title && t && !t.startsWith('[')) {
+      if (!title && t) {
         title = t;
         titleId = l.id;
-        return;
       }
 
-      if (t === '[*** 概要]') {
-        abstractId = l.id;
-        return;
-      }
-
+      if (t === '[*** 概要]') abstractId = l.id;
       if (t === '[*** 質問・コメント]') {
         qnaId = l.id;
         inQnASection = true;
         return;
       }
 
-      // 次の大見出しが来たら質問セクション終了
       if (inQnASection && /^\[\*{3}\s/.test(t)) {
         inQnASection = false;
         return;
       }
 
-      // ===== 質問抽出 =====
       if (inQnASection && /^\?\s/.test(t)) {
-        if (seenQuestionIds.has(l.id)) return;
-        seenQuestionIds.add(l.id);
-
+        const text = t.replace(/^\?\s*/, '').trim();
+        const key = text.replace(/\s+/g, ' ');
         const author = findQuestionAuthor(idx);
-        questions.push({
-          id: l.id,
-          author,
-          text: t.replace(/^\?\s*/, '')
-        });
+
+        const existing = questionMap.get(key);
+
+        // 既存がなく、または「作者あり」で上書きできる場合
+        if (
+          !existing ||
+          (!existing.author && author)
+        ) {
+          questionMap.set(key, {
+            id: l.id,
+            text,
+            author
+          });
+        }
       }
     });
 
-    // ===== UI生成 =====
-    const p = document.createElement('div');
-    p.id = PANEL_ID;
-    p.style = basePanelStyle + 'width:520px;max-height:80vh;';
-    applyPanelSettings(p);
+    const questions = Array.from(questionMap.values());
 
-    // --- タイトル ---
-    if (title) {
+    /* ================= パネル（固定） ================= */
+
+    let panel = document.getElementById(PANEL_ID);
+    let body;
+
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = PANEL_ID;
+      panel.style = basePanelStyle + 'width:520px;max-height:80vh;';
+      applyPanelSettings(panel);
+
       const h = document.createElement('div');
-      h.textContent = '📄 ' + title;
+      h.id = '__sb_paper_title__';
       h.style =
         'font-weight:bold;font-size:14px;cursor:pointer;margin-bottom:6px';
-      h.onclick = () => jump(titleId);
-      p.appendChild(h);
+      panel.appendChild(h);
+
+      const jumps = document.createElement('div');
+      jumps.id = '__sb_paper_jumps__';
+      jumps.style = 'margin-bottom:6px';
+      panel.appendChild(jumps);
+
+      panel.appendChild(document.createElement('hr'));
+
+      body = document.createElement('div');
+      body.id = '__sb_paper_body__';
+      panel.appendChild(body);
+
+      document.body.appendChild(panel);
+    } else {
+      body = panel.querySelector('#__sb_paper_body__');
     }
 
-    // --- ジャンプ ---
-    const jumpLine = (label, id) => {
+    /* ================= header 更新 ================= */
+
+    const h = panel.querySelector('#__sb_paper_title__');
+    h.textContent = '📄 ' + title;
+    h.onclick = () => jump(titleId);
+
+    const jumps = panel.querySelector('#__sb_paper_jumps__');
+    jumps.replaceChildren();
+
+    const addJump = (label, id) => {
       if (!id) return;
       const d = document.createElement('div');
       d.textContent = label;
-      d.style = 'cursor:pointer;color:#1565c0;margin:2px 0';
+      d.style = 'cursor:pointer;color:#1565c0';
       d.onclick = () => jump(id);
-      p.appendChild(d);
+      jumps.appendChild(d);
     };
 
-    jumpLine('🔎 概要へ', abstractId);
-    jumpLine('💬 質問・コメントへ', qnaId);
+    addJump('🔎 概要へ', abstractId);
+    addJump('💬 質問・コメントへ', qnaId);
 
-    p.appendChild(document.createElement('hr'));
+    /* ================= body 更新 ================= */
 
-    // --- 質問表示 ---
+    const frag = document.createDocumentFragment();
+
     if (questions.length) {
       const qh = document.createElement('div');
       qh.textContent = `❓ 質問 (${questions.length})`;
       qh.style = 'font-weight:bold;margin:6px 0';
-      p.appendChild(qh);
+      frag.appendChild(qh);
 
       questions.forEach(q => {
         const d = document.createElement('div');
         d.textContent =
-          '・' +
-          (q.author ? `${q.author}: ` : '?: ') +
-          q.text;
+          '・' + (q.author ? `${q.author}: ` : '?: ') + q.text;
         d.style =
           'cursor:pointer;padding-left:8px;' +
           'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
         d.onclick = () => jump(q.id);
-        p.appendChild(d);
+        frag.appendChild(d);
       });
     }
 
-    p.appendChild(document.createElement('hr'));
-
-    // --- 統計 ---
-    const { stats, idToName } = buildTalkStats(rawLines);
-    renderTalkStats(p, stats, idToName);
-
-    document.body.appendChild(p);
+    body.replaceChildren(frag);
   };
 
+  const startPaperIntroWatcher = (project, page) => {
+    if (paperIntroTimer) {
+      clearInterval(paperIntroTimer);
+      paperIntroTimer = null;
+    }
+
+    const run = async () => {
+      const j = await fetchPage(project, page);
+      if (!j) return;
+
+      // 念のため：論文紹介ページでなければ何もしない
+      if (!isPaperIntroPage(j.lines)) return;
+
+      const hash = computeLinesHash(j.lines);
+      if (hash === lastPaperIntroHash) {
+        return; // ★ 変更なし
+      }
+
+      lastPaperIntroHash = hash;
+      renderPaperPanelFromLines(project, page, j.lines);
+    };
+
+    run(); // 初回即時
+    paperIntroTimer = setInterval(run, 10000);
+  };
 
   /* ================= SPA監視 ================= */
 
@@ -952,7 +1146,6 @@
       renderMinutesFromLines(project, page, j.lines);
     }
   };
-
 
   let lastKey = null;
   const tick = () => {
@@ -971,18 +1164,30 @@
 
     saveHistory(project, page);
     
-    // ページ切り替え時
-    if (todoTimer) {
-      clearInterval(todoTimer);
-      todoTimer = null;
+    if (researchNoteTimer) {
+      clearInterval(researchNoteTimer);
+      researchNoteTimer = null;
     }
+
+    if (paperIntroTimer) {
+      clearInterval(paperIntroTimer);
+      paperIntroTimer = null;
+      lastPaperIntroHash = null;
+    }
+
+    if (minutesTimer) {
+      clearInterval(minutesTimer);
+      minutesTimer = null;
+      lastMinutesHash = null;
+    }
+
 
     if (!page) {
       renderProjectTop(project);
 
     } else if (/研究ノート/.test(page)) {
-      renderCalendar(project, page);
-      startTodoWatcher(project, page);
+      renderCalendar(project, page); // 初回DOM生成のみ
+      startResearchNoteWatcher(project, page);
 
     } else if (/実験計画書/.test(page)) {
       renderPlan(project, page);
@@ -990,6 +1195,16 @@
     } else {
       // デフォルトは「中身を見てから判断」
       renderPaperOrMinutes(project, page);
+
+      fetchPage(project, page).then(j => {
+        if (!j) return;
+
+        if (isPaperIntroPage(j.lines)) {
+          startPaperIntroWatcher(project, page);
+        } else {
+          startMinutesWatcher(project, page);
+        }
+      });
     }
 
   };
