@@ -7,6 +7,8 @@
   const MAIN_PANEL_ID = '__sb_final_panel__';
   const CALENDAR_ID = '__sb_calendar_panel__';
 
+  const closedPanels = new Set();
+
   /* ================= Style Registry ================= */
 
   const Styles = {
@@ -190,7 +192,31 @@
     p.appendChild(d);
   };
 
+  const attachCloseButton = (panel, panelId) => {
+    const btn = document.createElement('div');
+    btn.textContent = '✕';
+    btn.style = `
+      font-weight:bold;
+      position:absolute;
+      top:4px;
+      right:6px;
+      cursor:pointer;
+      font-size:14px;
+      color:#666;
+    `;
+
+    btn.onclick = () => {
+      closedPanels.add(panelId);
+      panel.remove();
+    };
+
+    panel.style.position = 'fixed'; // 念のため
+    panel.appendChild(btn);
+  };
+
+
   const getOrCreatePanel = (id, create) => {
+    if (closedPanels.has(id)) return null;
     let el = document.getElementById(id);
     if (el) return el;
 
@@ -395,6 +421,7 @@
         const p = document.createElement('div');
         applyStyle(p, Styles.panel.base, Styles.panel.main);
         applyPanelSettings(p);
+        attachCloseButton(p, MAIN_PANEL_ID);
 
         // 表示順はここで完全に制御
         renderMyResearchNote(p, project, s);
@@ -468,9 +495,9 @@
   /* ================= 研究ノート：月カレンダー（完全版） ================= */
 
   const createCalendarPanel = (project, page) => {
-    const box = document.createElement('div');
-    applyStyle(box, Styles.panel.base, Styles.panelCalendar);
-    applyPanelSettings(box);
+    const panel = document.createElement('div');
+    applyStyle(panel, Styles.panel.base, Styles.panelCalendar);
+    applyPanelSettings(panel);
 
     const move = (p, d) => {
       const m = p.match(/(20\d{2})\.(\d{2})/);
@@ -518,6 +545,10 @@
       btn('今月へ', () => {
         const np = todayPage(page);
         if (np) location.assign(`/${project}/${encodeURIComponent(np)}`);
+      }),
+      btn('✕', () => {
+        closedPanels.add(CALENDAR_ID);
+        panel.remove();
       })
     );
 
@@ -536,10 +567,10 @@
       grid.appendChild(h);
     });
 
-    box.append(head, grid);
-    document.body.appendChild(box);
+    panel.append(head, grid);
+    document.body.appendChild(panel);
 
-    return box;
+    return panel;
   };
 
   const renderCalendar = (project, page) => {
@@ -550,10 +581,10 @@
   };
 
   const updateCalendarFromLines = (project, page, j) => {
-    const box = document.getElementById(CALENDAR_ID);
-    if (!box) return;
+    const panel = document.getElementById(CALENDAR_ID);
+    if (!panel) return;
 
-    const grid = box.querySelector('.__sb_calendar_grid__');
+    const grid = panel.querySelector('.__sb_calendar_grid__');
     if (!grid) return;
 
     // 曜日行（7個）だけ残す
@@ -641,16 +672,16 @@
   };
 
   const renderExperimentPlan = async (project, page) => {
-    const j = await fetchPage(project, page);
-    if (!j) return;
+    const json = await fetchPage(project, page);
+    if (!json) return;
 
     const panel = getOrCreatePanel(MAIN_PANEL_ID, createExperimentPlanPanel);
     panel.innerHTML = ''; // ← update というより再構築
 
-    renderPageTitle(panel, j.lines);
+    renderPageTitle(panel, json.lines);
 
     let cur = null;
-    j.lines.forEach(l => {
+    json.lines.forEach(l => {
       const t = (l.text || '').trim();
       if (/^\[\*{3,}\(&/.test(t)) {
         cur = document.createElement('div');
@@ -679,8 +710,6 @@
     const title = document.createElement('div');
     title.id = '__sb_minutes_title__';
     panel.appendChild(title);
-
-    //panel.appendChild(document.createElement('hr'));
 
     const body = document.createElement('div');
     body.id = '__sb_minutes_body__';
@@ -760,7 +789,6 @@
 
     frag.appendChild(document.createElement('hr'));
 
-    /* --- 発言統計 --- */
     const statsBlock = createTalkStatsBlock(rawLines);
     if (statsBlock) {
       frag.appendChild(statsBlock);
@@ -790,118 +818,97 @@
     loadSettings(s => {
       const TODOSHOW = 5;
 
-      const todos = [];
-      let currentDate = null;
+      const extractTodos = () => {
+        const todos = [];
+        let currentDate = null;
 
-      /* ---- TODO / DONE 抽出 ---- */
-      lines.forEach(l => {
-        const text = (l.text || '').trim();
+        lines.forEach(l => {
+          const text = (l.text || '').trim();
 
-        const dm = text.match(/^\[\*\(\s*(20\d{2})\.(\d{2})\.(\d{2})/);
-        if (dm) {
-          currentDate = `${dm[1]}.${dm[2]}.${dm[3]}`;
-          return;
-        }
+          const dm = text.match(/^\[\*\(\s*(20\d{2})\.(\d{2})\.(\d{2})/);
+          if (dm) {
+            currentDate = `${dm[1]}.${dm[2]}.${dm[3]}`;
+            return;
+          }
 
-        if (text.includes(s.todoMark)) {
-          todos.push({
-            id: l.id,
-            text: text.replace(s.todoMark, '').trim(),
-            date: currentDate,
-            done: false
-          });
-          return;
-        }
+          if (text.includes(s.todoMark)) {
+            todos.push({
+              id: l.id,
+              text: text.replace(s.todoMark, '').trim(),
+              date: currentDate,
+              done: false
+            });
+            return;
+          }
 
-        if (text.includes(s.doneMark)) {
-          todos.push({
-            id: l.id,
-            text: text.replace(s.doneMark, '').trim(),
-            date: currentDate,
-            done: true
-          });
-        }
-      });
+          if (text.includes(s.doneMark)) {
+            todos.push({
+              id: l.id,
+              text: text.replace(s.doneMark, '').trim(),
+              date: currentDate,
+              done: true
+            });
+          }
+        });
 
+        return todos;
+      };
+
+      const todos = extractTodos();
       if (!todos.length) {
         document.getElementById(TODO_PANEL_ID)?.remove();
         return;
       }
 
-      // ★ ここが変更点
-      const p = getOrCreatePanel(TODO_PANEL_ID, createTodoPanel);
-      p.innerHTML = '';
+      const panel = getOrCreatePanel(TODO_PANEL_ID, createTodoPanel);
+      panel.innerHTML = '';
 
-      /* ---- ヘッダ ---- */
-      const activeCount = todos.filter(t => !t.done).length;
-      const totalCount = todos.length;
+      const activeTodos = todos.filter(t => !t.done);
+      const doneTodos   = todos.filter(t => t.done);
 
-      const h = document.createElement('div');
-      h.textContent = `📝 TODO LIST（残り ${activeCount} / 全 ${totalCount}）`;
-      applyStyle(h, Styles.text.panelTitle);
-      p.appendChild(h);
+      const header = document.createElement('div');
+      header.textContent =
+        `📝 TODO LIST（残り ${activeTodos.length} / 全 ${todos.length}）`;
+      applyStyle(header, Styles.text.panelTitle);
 
-      /* ---- リスト ---- */
+      panel.appendChild(header);
+      attachCloseButton(panel, TODO_PANEL_ID);
+
       const list = document.createElement('div');
-      p.appendChild(list);
+      panel.appendChild(list);
 
-      const items = [];
-
-      todos.forEach(t => {
+      const createTodoRow = (todo) => {
         const d = document.createElement('div');
         d.style =
           'cursor:pointer;padding:4px 6px;' +
           'border-bottom:1px solid #eee;' +
           'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
 
-        d.textContent = '• ' + t.text + (t.date ? ` (${t.date})` : '');
+        d.textContent = '• ' + todo.text + (todo.date ? ` (${todo.date})` : '');
 
-        if (t.done) {
+        if (todo.done) {
           d.style.color = '#999';
           d.style.textDecoration = 'line-through';
         }
 
-        d.onclick = () => {
-          const a = document.createElement('a');
-          a.href = '#' + t.id;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-        };
-
-        items.push({ dom: d, done: t.done });
-        list.appendChild(d);
-      });
-
-      /* ---- 表示制御 ---- */
-      const activeItems = items.filter(x => !x.done);
-      const doneItems = items.filter(x => x.done);
-
-      activeItems.forEach((x, i) => {
-        x.dom.style.display = i < TODOSHOW ? '' : 'none';
-      });
-      doneItems.forEach(x => {
-        x.dom.style.display = 'none';
-      });
-
-      const rest = Math.max(0, activeItems.length - TODOSHOW);
-      let moreLine = null;
-
-      if (rest > 0) {
-        moreLine = document.createElement('div');
-        moreLine.textContent = `… 他 ${rest} 件`;
-        moreLine.style = 'padding:4px 6px;font-size:11px;color:#666';
-        list.appendChild(moreLine);
-      }
-
-      const showAllTodos = () => {
-        items.forEach(x => {
-          x.dom.style.display = '';
-        });
-        if (moreLine) moreLine.style.display = 'none';
+        d.onclick = () => jump(todo.id);
+        return d;
       };
 
-      const showCollapsedTodos = () => {
+      const items = [];
+
+      // 表示順をここで固定（未完了 → 完了）
+      [...activeTodos, ...doneTodos].forEach(todo => {
+        const row = createTodoRow(todo);
+        items.push({ dom: row, done: todo.done });
+        list.appendChild(row);
+      });
+
+      const activeItems = items.filter(x => !x.done);
+      const doneItems   = items.filter(x => x.done);
+
+      let moreLine = null;
+      const showCollapsed = () => {
         activeItems.forEach((x, i) => {
           x.dom.style.display = i < TODOSHOW ? '' : 'none';
         });
@@ -911,9 +918,26 @@
         if (moreLine) moreLine.style.display = '';
       };
 
-      p.addEventListener('mouseenter', showAllTodos);
-      p.addEventListener('mouseleave', showCollapsedTodos);
+      const showAll = () => {
+        items.forEach(x => {
+          x.dom.style.display = '';
+        });
+        if (moreLine) moreLine.style.display = 'none';
+      };
 
+      // 初期状態
+      showCollapsed();
+
+      const rest = Math.max(0, activeItems.length - TODOSHOW);
+      if (rest > 0) {
+        moreLine = document.createElement('div');
+        moreLine.textContent = `… 他 ${rest} 件`;
+        moreLine.style = 'padding:4px 6px;font-size:11px;color:#666';
+        list.appendChild(moreLine);
+      }
+
+      panel.addEventListener('mouseenter', showAll);
+      panel.addEventListener('mouseleave', showCollapsed);
     });
   };
 
@@ -982,13 +1006,12 @@
       panel.id = MAIN_PANEL_ID;
       applyStyle(panel, Styles.panel.base);
       applyPanelSettings(panel);
+      attachCloseButton(panel, MAIN_PANEL_ID);
 
       const title = document.createElement('div');
       title.id = '__sb_minutes_title__';
       applyStyle(title, Styles.text.panelTitle);
       panel.appendChild(title);
-
-      //panel.appendChild(document.createElement('hr'));
 
       body = document.createElement('div');
       body.id = '__sb_minutes_body__';
@@ -1005,7 +1028,6 @@
     const titleEl = panel.querySelector('#__sb_minutes_title__');
     titleEl.textContent = '📌 ' + pageTitle;
     if (pageTitleId) titleEl.onclick = () => jump(pageTitleId);
-
 
     const isTitleLine = (t) =>
       /^タイトル[:：]/.test(t) ||
@@ -1109,6 +1131,7 @@
     const panel = document.createElement('div');
     applyStyle(panel, Styles.panel.base, Styles.panel.main);
     applyPanelSettings(panel);
+    attachCloseButton(panel, MAIN_PANEL_ID);
 
     const title = document.createElement('div');
     title.id = '__sb_paper_title__';
@@ -1336,6 +1359,7 @@
 
     clearUI();
     stopAllWatchers();
+    closedPanels.clear();
 
     const m = location.pathname.match(/^\/([^/]+)(?:\/(.*))?$/);
     if (!m) return;
