@@ -5,7 +5,114 @@
 
   const TODO_PANEL_ID = '__sb_todo_panel__';
   const MAIN_PANEL_ID = '__sb_final_panel__';
-  const CALENDAR_ID = 'sb-cal';
+  const CALENDAR_ID = '__sb_calendar_panel__';
+
+  /* ================= Style Registry ================= */
+
+  const Styles = {
+    panel: {
+      base: `
+        position:fixed;
+        top:10px;
+        right:10px;
+        background:#fff;
+        border:1px solid #ccc;
+        box-shadow:0 2px 10px rgba(0,0,0,.25);
+        z-index:99999;
+        font:12px/1.5 sans-serif;
+        overflow:auto;
+        transition:opacity .2s;
+      `,
+      idle: `
+        opacity:0.35;
+      `,
+      active: `
+        opacity:1;
+      `,
+    },
+
+    panelTodo: `
+      right:520px;
+      width:320px;
+      max-height:60vh;
+    `,
+
+    panelCalendar: `
+      width:33vw;
+      max-width:560px;
+      min-width:420px;
+      height:66vh;
+      display:flex;
+      flex-direction:column;
+    `,
+
+    panelMain: `
+      width:480px;
+      max-height:560px;
+    `,
+
+    calendar: {
+      header: `
+        padding:6px;
+        font-weight:bold;
+        border-bottom:1px solid #ddd;
+        background:#f5f5f5;
+        display:flex;
+        align-items:center;
+        gap:8px;
+      `,
+      grid: `
+        flex:1;
+        padding:6px;
+        display:grid;
+        grid-template-columns:repeat(7,1fr);
+        grid-template-rows:auto repeat(6,1fr);
+        gap:2px;
+      `
+    },
+
+    text: {
+      panelTitle: `
+        font-weight:bold;
+        font-size:14px;
+        margin-bottom:6px;
+        cursor:pointer;
+      `,
+
+      sectionTitle: `
+        font-weight:bold;
+        margin:6px 0;
+        cursor:pointer;
+      `,
+
+      subTitle: `
+        font-weight:bold;
+        margin-bottom:4px;
+      `,
+
+      item: `
+        cursor:pointer;
+        padding-left:6px;
+      `,
+
+      muted: `
+        color:#666;
+        font-size:11px;
+      `
+    },
+
+    list: {
+      ellipsis: `
+        white-space:nowrap;
+        overflow:hidden;
+        text-overflow:ellipsis;
+      `
+    }
+  };
+
+  const applyStyle = (el, ...styles) => {
+    el.style.cssText = styles.join('');
+  };
 
   /* ================= 設定 ================= */
 
@@ -33,6 +140,7 @@
   const clearUI = () => {
     document.getElementById(CALENDAR_ID)?.remove();
     document.getElementById(MAIN_PANEL_ID)?.remove();
+    document.getElementById(TODO_PANEL_ID)?.remove();
   };
 
   const jump = id => {
@@ -73,13 +181,6 @@
   const isPaperIntroPage = (lines) =>
     lines.some(l => (l.text || '').includes('#論文紹介関連'));
 
-  const basePanelStyle =
-    'position:fixed;top:10px;right:10px;' +
-    'background:#fff;border:1px solid #ccc;' +
-    'box-shadow:0 2px 10px rgba(0,0,0,.25);' +
-    'z-index:99999;font:12px/1.5 sans-serif;' +
-    'overflow:auto;transition:opacity .2s';
-
   const appendLink = (p, label, project, page, prefix = '•') => {
     const d = document.createElement('div');
     d.textContent = prefix + label;
@@ -87,6 +188,16 @@
     d.onclick = () =>
       location.assign(`/${project}/${encodeURIComponent(page)}`);
     p.appendChild(d);
+  };
+
+  const getOrCreatePanel = (id, create) => {
+    let el = document.getElementById(id);
+    if (el) return el;
+
+    el = create();
+    el.id = id;
+    document.body.appendChild(el);
+    return el;
   };
 
   const applyPanelSettings = (p) => {
@@ -122,55 +233,69 @@
 
     const h = document.createElement('div');
     h.textContent = '📌 ' + t;
-    h.style =
-      'font-weight:bold;font-size:14px;' +
-      'margin-bottom:6px;cursor:pointer';
+    applyStyle(h, Styles.text.panelTitle);
 
     h.onclick = () => jump(rawLines[0].id);
 
     parent.appendChild(h);
   };
 
-  const createPageWatcher = ({ interval = 10000, onUpdate }) => {
-    let timer = null;
-    let lastUpdated = null;
+  /* ================== PageWatcher Class =================== */
+  class PageWatcher {
+    constructor({
+      interval = 10000,
+      fetchPage,
+      getRevision,
+      onInit,
+      onUpdate
+    }) {
+      this.interval = interval;
+      this.fetchPage = fetchPage;
+      this.getRevision = getRevision;
+      this.onInit = onInit;
+      this.onUpdate = onUpdate;
 
-    const stop = () => {
-      if (timer) clearInterval(timer);
-      timer = null;
-      lastUpdated = null;
-    };
+      this.timer = null;
+      this.lastRevision = null;
+      this.isWarmedUp = false;
+    }
 
-    const start = (project, page) => {
-      stop();
+    start(project, page) {
+      this.stop();
 
       const run = async () => {
-        const json = await fetchPage(project, page);
+        const json = await this.fetchPage(project, page);
         if (!json) return;
 
-        if (
-          typeof json.updated === 'number' &&
-          json.updated === lastUpdated
-        ) {
+        const revision = this.getRevision(json);
+
+        // 初回：baseline 設定のみ
+        if (!this.isWarmedUp) {
+          this.lastRevision = revision;
+          this.isWarmedUp = true;
+          this.onInit?.({ project, page, json });
           return;
         }
-        lastUpdated = json.updated;
 
-        onUpdate({
-          project,
-          page,
-          lines: json.lines,
-          json
-        });
+        // 変更なし
+        if (revision === this.lastRevision) return;
+
+        // 変更あり
+        this.lastRevision = revision;
+        this.onUpdate({ project, page, json });
       };
 
-      run(); // 初回即時
-      timer = setInterval(run, interval);
-    };
+      run();
+      this.timer = setInterval(run, this.interval);
+    }
 
-    return { start, stop };
-  };
-
+    stop() {
+      if (this.timer) clearInterval(this.timer);
+      this.timer = null;
+      this.lastRevision = null;
+      this.isWarmedUp = false;
+    }
+  }
 
   /* ================= 履歴管理 ================= */
 
@@ -196,7 +321,7 @@
 
     const h = document.createElement('div');
     h.textContent = '🧑 自分の研究ノート';
-    h.style = 'font-weight:bold;margin-bottom:4px';
+    applyStyle(h, Styles.text.sectionTitle);
     p.appendChild(h);
 
     appendLink(p, page, project, page, '📅 ');
@@ -216,7 +341,7 @@
 
     const h = document.createElement('div');
     h.textContent = '⭐ よく見ているページ';
-    h.style = 'font-weight:bold;margin:8px 0 4px';
+    applyStyle(h, Styles.text.sectionTitle);
     p.appendChild(h);
 
     items.forEach(([page, count]) => {
@@ -224,24 +349,40 @@
     });
   };
 
+  const getRecentPages = (history, limit = 10) => {
+    const seen = new Set();
+    const result = [];
+
+    for (let i = history.length - 1; i >= 0; i--) {
+      const page = history[i].page;
+      if (seen.has(page)) continue;
+      seen.add(page);
+      result.push(history[i]);
+      if (result.length >= limit) break;
+    }
+
+    return result;
+  };
+
   const renderHistory = (p, project, history) => {
-    if (!history.length) return;
+    const items = getRecentPages(history, 10);
+    if (!items.length) return;
 
     const h = document.createElement('div');
     h.textContent = '🕒 最近見たページ';
-    h.style = 'font-weight:bold;margin:8px 0 4px';
+    applyStyle(h, Styles.text.sectionTitle);
     p.appendChild(h);
 
-    history.slice(-10).reverse().forEach(e => {
+    items.forEach(e => {
       appendLink(p, e.page, project, e.page);
     });
   };
 
+
   const renderSettingsEntry = (p) => {
     const d = document.createElement('div');
     d.textContent = '⚙ 設定';
-    d.style =
-      'cursor:pointer;font-size:11px;color:#555;margin-top:10px';
+    applyStyle(d, Styles.text.sectionTitle);
     d.onclick = () => renderSettingsPanel(p);
     p.appendChild(d);
   };
@@ -252,8 +393,7 @@
         const history = data.history || [];
 
         const p = document.createElement('div');
-        p.id = MAIN_PANEL_ID;
-        p.style = basePanelStyle;
+        applyStyle(p, Styles.panel.base, Styles.panel.main);
         applyPanelSettings(p);
 
         // 表示順はここで完全に制御
@@ -327,22 +467,9 @@
 
   /* ================= 研究ノート：月カレンダー（完全版） ================= */
 
-  const renderCalendar = async (project, page) => {
-    const j = await fetchPage(project, page);
-    if (!j) return;
-
-    // 既に存在する場合は作らない
-    if (document.getElementById(CALENDAR_ID)) return;
-
+  const createCalendarPanel = (project, page) => {
     const box = document.createElement('div');
-    box.id = CALENDAR_ID;
-    box.style =
-      'position:fixed;top:10px;right:10px;width:33vw;max-width:560px;' +
-      'min-width:420px;height:66vh;background:#fff;z-index:99999;' +
-      'border:1px solid #ccc;box-shadow:0 2px 10px rgba(0,0,0,.25);' +
-      'display:flex;flex-direction:column;font-size:12px;' +
-      'transition:opacity .2s';
-
+    applyStyle(box, Styles.panel.base, Styles.panelCalendar);
     applyPanelSettings(box);
 
     const move = (p, d) => {
@@ -365,9 +492,7 @@
     const ym = page.match(/(20\d{2})\.(\d{2})/);
 
     const head = document.createElement('div');
-    head.style =
-      'padding:6px;font-weight:bold;border-bottom:1px solid #ddd;' +
-      'background:#f5f5f5;display:flex;align-items:center;gap:8px';
+    applyStyle(head, Styles.calendar.header);
 
     const btn = (label, fn) => {
       const s = document.createElement('span');
@@ -397,11 +522,8 @@
     );
 
     const grid = document.createElement('div');
-    grid.className = '__sb_calendar_grid__'; // ★ 更新用フック
-    grid.style =
-      'flex:1;padding:6px;display:grid;' +
-      'grid-template-columns:repeat(7,1fr);' +
-      'grid-template-rows:auto repeat(6,1fr);gap:2px';
+    grid.className = '__sb_calendar_grid__';
+    applyStyle(grid, Styles.calendar.grid);
 
     loadSettings(s => {
       grid.style.fontSize = s.calendarFontSize + 'px';
@@ -410,16 +532,21 @@
     ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(d => {
       const h = document.createElement('div');
       h.textContent = d;
-      h.style =
-        'text-align:center;font-weight:bold;color:#666;font-size:10px';
+      applyStyle(h, Styles.text.sectionTitle, 'text-align:center');
       grid.appendChild(h);
     });
 
     box.append(head, grid);
     document.body.appendChild(box);
 
-    // 初回描画
-    updateCalendarFromLines(project, page, j);
+    return box;
+  };
+
+  const renderCalendar = (project, page) => {
+    getOrCreatePanel(
+      CALENDAR_ID,
+      () => createCalendarPanel(project, page)
+    );
   };
 
   const updateCalendarFromLines = (project, page, j) => {
@@ -479,7 +606,6 @@
       c.style =
         'border:1px solid #ddd;padding:2px;cursor:pointer;' +
         'display:flex;flex-direction:column;gap:1px;overflow:hidden';
-
       if (d === today) c.style.background = 'rgba(0,200,0,0.18)';
 
       const dd = document.createElement('div');
@@ -507,17 +633,21 @@
   };
 
   /* ================= 実験計画書 ================= */
+  const createExperimentPlanPanel = () => {
+    const panel = document.createElement('div');
+    applyStyle(panel, Styles.panel.base, Styles.panel.main);
+    applyPanelSettings(panel);
+    return panel;
+  };
 
   const renderExperimentPlan = async (project, page) => {
     const j = await fetchPage(project, page);
     if (!j) return;
 
-    const p = document.createElement('div');
-    p.id = MAIN_PANEL_ID;
-    p.style = basePanelStyle;
-    applyPanelSettings(p);
+    const panel = getOrCreatePanel(MAIN_PANEL_ID, createExperimentPlanPanel);
+    panel.innerHTML = ''; // ← update というより再構築
 
-    renderPageTitle(p, j.lines);
+    renderPageTitle(panel, j.lines);
 
     let cur = null;
     j.lines.forEach(l => {
@@ -525,53 +655,49 @@
       if (/^\[\*{3,}\(&/.test(t)) {
         cur = document.createElement('div');
         cur.textContent = '■ ' + t.replace(/^\[\*+\(&\s*/, '').replace(/\]$/, '');
-        cur.style = 'font-weight:bold;margin:6px 0;cursor:pointer';
+        applyStyle(cur, Styles.text.sectionTitle);
         cur.onclick = () => jump(l.id);
-        p.appendChild(cur);
+        panel.appendChild(cur);
       } else if (/^\[\*&\s+/.test(t) && cur) {
         const d = document.createElement('div');
         d.textContent = '└ ' + t.replace(/^\[\*&\s*/, '').replace(/\]$/, '');
-        d.style = 'padding-left:16px;cursor:pointer';
+        applyStyle(d, Styles.text.subTitleTitle);
         d.onclick = () => jump(l.id);
-        p.appendChild(d);
+        panel.appendChild(d);
       }
     });
 
-    document.body.appendChild(p);
+    document.body.appendChild(panel);
   };
 
   /* ==================== 議事録など ====================== */
+  const createMinutesPanel = () => {
+    const panel = document.createElement('div');
+    applyStyle(panel, Styles.panel.base);
+    applyPanelSettings(panel);
+
+    const title = document.createElement('div');
+    title.id = '__sb_minutes_title__';
+    panel.appendChild(title);
+
+    //panel.appendChild(document.createElement('hr'));
+
+    const body = document.createElement('div');
+    body.id = '__sb_minutes_body__';
+    panel.appendChild(body);
+
+    return panel;
+  };
+
   const renderMinutesFromLines = (project, page, rawLines) => {
     const lines = normalizeLines(rawLines, { withUid: true });
 
-    let panel = document.getElementById(MAIN_PANEL_ID);
-    let body;
-
-    if (!panel) {
-      panel = document.createElement('div');
-      panel.id = MAIN_PANEL_ID;
-      panel.style = basePanelStyle;
-      applyPanelSettings(panel);
-
-      const title = document.createElement('div');
-      title.id = '__sb_minutes_title__';
-      title.style =
-        'font-weight:bold;font-size:14px;cursor:pointer;margin-bottom:6px';
-      panel.appendChild(title);
-
-      panel.appendChild(document.createElement('hr'));
-
-      body = document.createElement('div');
-      body.id = '__sb_minutes_body__';
-      panel.appendChild(body);
-
-      document.body.appendChild(panel);
-    } else {
-      body = panel.querySelector('#__sb_minutes_body__');
-    }
+    const panel = getOrCreatePanel(MAIN_PANEL_ID, createMinutesPanel);
+    const body = panel.querySelector('#__sb_minutes_body__');
 
     const header = panel.querySelector('#__sb_minutes_title__');
     header.textContent = '📌 ' + (rawLines[0]?.text || '');
+    applyStyle(header, Styles.text.panelTitle);
     header.onclick = () => jump(rawLines[0]?.id);
 
     const frag = document.createDocumentFragment();
@@ -618,14 +744,15 @@
     sessions.forEach(s => {
       const h = document.createElement('div');
       h.textContent = s.title;
-      h.style = 'font-weight:bold;margin:6px 0;cursor:pointer';
+      applyStyle(h, Styles.text.sectionTitle);
+      
       h.onclick = () => jump(s.id);
       frag.appendChild(h);
 
       s.talks.forEach(t => {
         const d = document.createElement('div');
         d.textContent = '└ ' + t.title;
-        d.style = 'padding-left:14px;cursor:pointer';
+        applyStyle(d, Styles.text.item);
         d.onclick = () => jump(t.id);
         frag.appendChild(d);
       });
@@ -634,16 +761,31 @@
     frag.appendChild(document.createElement('hr'));
 
     /* --- 発言統計 --- */
-    const { stats, idToName } = buildTalkStats(rawLines);
-    const statsBox = document.createElement('div');
-    renderTalkStats(statsBox, stats, idToName);
-    frag.appendChild(statsBox);
+    const statsBlock = createTalkStatsBlock(rawLines);
+    if (statsBlock) {
+      frag.appendChild(statsBlock);
+    }
 
     body.replaceChildren(frag);
   };
 
+  const createTalkStatsBlock = (rawLines) => {
+    const { stats, idToName } = buildTalkStats(rawLines);
+    if (!Object.keys(stats).length) return null;
+
+    const box = document.createElement('div');
+    renderTalkStats(box, stats, idToName);
+    return box;
+  };
 
   /* ================= TODO PANEL (stable version) ================= */
+  const createTodoPanel = () => {
+    const p = document.createElement('div');
+    applyStyle(p, Styles.panel.base, Styles.panelTodo);
+    applyPanelSettings(p);
+    return p;
+  };
+
   const renderTodoPanel = (project, page, lines) => {
     loadSettings(s => {
       const TODOSHOW = 5;
@@ -655,14 +797,12 @@
       lines.forEach(l => {
         const text = (l.text || '').trim();
 
-        // 日付ヘッダ
         const dm = text.match(/^\[\*\(\s*(20\d{2})\.(\d{2})\.(\d{2})/);
         if (dm) {
           currentDate = `${dm[1]}.${dm[2]}.${dm[3]}`;
           return;
         }
 
-        // TODO
         if (text.includes(s.todoMark)) {
           todos.push({
             id: l.id,
@@ -673,7 +813,6 @@
           return;
         }
 
-        // DONE
         if (text.includes(s.doneMark)) {
           todos.push({
             id: l.id,
@@ -689,30 +828,20 @@
         return;
       }
 
-      document.getElementById(TODO_PANEL_ID)?.remove();
+      // ★ ここが変更点
+      const p = getOrCreatePanel(TODO_PANEL_ID, createTodoPanel);
+      p.innerHTML = '';
 
-      const p = document.createElement('div');
-      p.id = TODO_PANEL_ID;
-      p.style =
-        'position:fixed;top:10px;right:520px;width:320px;' +
-        'max-height:60vh;overflow:auto;' +
-        'background:#fff;border:1px solid #ccc;' +
-        'box-shadow:0 2px 10px rgba(0,0,0,.25);' +
-        'z-index:99999;font:12px/1.4 sans-serif;' +
-        'transition:opacity .2s';
-
-      applyPanelSettings(p);
-
+      /* ---- ヘッダ ---- */
       const activeCount = todos.filter(t => !t.done).length;
       const totalCount = todos.length;
 
       const h = document.createElement('div');
       h.textContent = `📝 TODO LIST（残り ${activeCount} / 全 ${totalCount}）`;
-      h.style =
-        'font-weight:bold;padding:6px;border-bottom:1px solid #ddd;' +
-        'background:#f5f5f5';
+      applyStyle(h, Styles.text.panelTitle);
       p.appendChild(h);
 
+      /* ---- リスト ---- */
       const list = document.createElement('div');
       p.appendChild(list);
 
@@ -725,12 +854,11 @@
           'border-bottom:1px solid #eee;' +
           'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
 
-        d.textContent =
-          '• ' + t.text + (t.date ? ` (${t.date})` : '');
+        d.textContent = '• ' + t.text + (t.date ? ` (${t.date})` : '');
 
         if (t.done) {
           d.style.color = '#999';
-          d.style.textDecoration = 'line-through'; // ★ 取り消し線
+          d.style.textDecoration = 'line-through';
         }
 
         d.onclick = () => {
@@ -762,19 +890,18 @@
       if (rest > 0) {
         moreLine = document.createElement('div');
         moreLine.textContent = `… 他 ${rest} 件`;
-        moreLine.style =
-          'padding:4px 6px;font-size:11px;color:#666';
+        moreLine.style = 'padding:4px 6px;font-size:11px;color:#666';
         list.appendChild(moreLine);
       }
 
-      p.addEventListener('mouseenter', () => {
+      const showAllTodos = () => {
         items.forEach(x => {
           x.dom.style.display = '';
         });
         if (moreLine) moreLine.style.display = 'none';
-      });
+      };
 
-      p.addEventListener('mouseleave', () => {
+      const showCollapsedTodos = () => {
         activeItems.forEach((x, i) => {
           x.dom.style.display = i < TODOSHOW ? '' : 'none';
         });
@@ -782,9 +909,11 @@
           x.dom.style.display = 'none';
         });
         if (moreLine) moreLine.style.display = '';
-      });
+      };
 
-      document.body.appendChild(p);
+      p.addEventListener('mouseenter', showAllTodos);
+      p.addEventListener('mouseleave', showCollapsedTodos);
+
     });
   };
 
@@ -824,7 +953,7 @@
 
     const h = document.createElement('div');
     h.textContent = '📊 発言数';
-    h.style = 'font-weight:bold;margin:6px 0';
+    applyStyle(h, Styles.text.sectionTitle);
     parent.appendChild(h);
 
     const max = Math.max(...entries.map(e => e[1]), 1);
@@ -851,15 +980,15 @@
     if (!panel) {
       panel = document.createElement('div');
       panel.id = MAIN_PANEL_ID;
-      panel.style = basePanelStyle;
+      applyStyle(panel, Styles.panel.base);
       applyPanelSettings(panel);
 
       const title = document.createElement('div');
       title.id = '__sb_minutes_title__';
-      title.style = 'font-weight:bold;font-size:14px;cursor:pointer;margin-bottom:6px';
+      applyStyle(title, Styles.text.panelTitle);
       panel.appendChild(title);
 
-      panel.appendChild(document.createElement('hr'));
+      //panel.appendChild(document.createElement('hr'));
 
       body = document.createElement('div');
       body.id = '__sb_minutes_body__';
@@ -956,7 +1085,7 @@
 
       const sh = document.createElement('div');
       sh.textContent = `🎤 ${s.title}`;
-      sh.style = 'font-weight:bold;margin-top:8px;cursor:pointer';
+      applyStyle(sh, Styles.text.sectionTitle);
       sh.onclick = () => jump(s.id);
       frag.appendChild(sh);
 
@@ -964,9 +1093,7 @@
         const d = document.createElement('div');
         d.textContent =
           '・' + (q.author ? `${q.author}: ` : '?: ') + q.text;
-        d.style =
-          'padding-left:12px;cursor:pointer;' +
-          'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+        applyStyle(d, Styles.text.item, Styles.list.ellipsis);
         d.onclick = () => jump(q.id);
         frag.appendChild(d);
       });
@@ -978,6 +1105,25 @@
   };
 
   /* ================= 論文紹介パネル =============== */
+  const createPaperIntroPanel = () => {
+    const panel = document.createElement('div');
+    applyStyle(panel, Styles.panel.base, Styles.panel.main);
+    applyPanelSettings(panel);
+
+    const title = document.createElement('div');
+    title.id = '__sb_paper_title__';
+    panel.appendChild(title);
+
+    const jumps = document.createElement('div');
+    jumps.id = '__sb_paper_jumps__';
+    panel.appendChild(jumps);
+
+    const body = document.createElement('div');
+    body.id = '__sb_paper_body__';
+    panel.appendChild(body);
+
+    return panel;
+  };
 
   const renderPaperPanelFromLines = (project, page, rawLines) => {
     const lines = normalizeLines(rawLines);
@@ -1045,108 +1191,112 @@
 
     const questions = Array.from(questionMap.values());
 
-    let panel = document.getElementById(MAIN_PANEL_ID);
-    let body;
-
-    if (!panel) {
-      panel = document.createElement('div');
-      panel.id = MAIN_PANEL_ID;
-      panel.style = basePanelStyle + 'width:520px;max-height:80vh;';
-      applyPanelSettings(panel);
-
-      // タイトル
-      const h = document.createElement('div');
-      h.id = '__sb_paper_title__';
-      h.style =
-        'font-weight:bold;font-size:14px;cursor:pointer;margin-bottom:6px';
-      panel.appendChild(h);
-
-      // ジャンプ
-      const jumps = document.createElement('div');
-      jumps.id = '__sb_paper_jumps__';
-      jumps.style = 'margin-bottom:6px';
-      panel.appendChild(jumps);
-
-      panel.appendChild(document.createElement('hr'));
-
-      // body（差し替え対象）
-      body = document.createElement('div');
-      body.id = '__sb_paper_body__';
-      panel.appendChild(body);
-
-      document.body.appendChild(panel);
-    } else {
-      body = panel.querySelector('#__sb_paper_body__');
-    }
+    const panel = getOrCreatePanel(MAIN_PANEL_ID, createPaperIntroPanel);
+    const body = panel.querySelector('#__sb_paper_body__');
 
     const h = panel.querySelector('#__sb_paper_title__');
     h.textContent = '📄 ' + title;
+    applyStyle(h, Styles.text.panelTitle);
     if (titleId) h.onclick = () => jump(titleId);
 
     const jumps = panel.querySelector('#__sb_paper_jumps__');
     jumps.replaceChildren();
 
-    const addJump = (label, id) => {
-      if (!id) return;
-      const d = document.createElement('div');
-      d.textContent = label;
-      d.style = 'cursor:pointer;color:#1565c0';
-      d.onclick = () => jump(id);
-      jumps.appendChild(d);
-    };
+    // const addJump = (label, id) => {
+    //   if (!id) return;
+    //   const d = document.createElement('div');
+    //   d.textContent = label;
+    //   d.style = 'cursor:pointer;color:#1565c0';
+    //   d.onclick = () => jump(id);
+    //   jumps.appendChild(d);
+    // };
 
-    addJump('🔎 概要へ', abstractId);
-    addJump('💬 質問・コメントへ', qnaId);
+    // addJump('🔎 概要へ', abstractId);
+    // addJump('💬 質問・コメントへ', qnaId);
 
     const frag = document.createDocumentFragment();
 
     if (questions.length) {
       const qh = document.createElement('div');
       qh.textContent = `❓ 質問 (${questions.length})`;
-      qh.style = 'font-weight:bold;margin:6px 0';
+      applyStyle(qh, Styles.sectionTitle);
+      //qh.style = 'font-weight:bold;margin:6px 0';
       frag.appendChild(qh);
 
       questions.forEach(q => {
         const d = document.createElement('div');
         d.textContent =
           '・' + (q.author ? `${q.author}: ` : '?: ') + q.text;
-        d.style =
-          'cursor:pointer;padding-left:8px;' +
-          'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+        applyStyle(d, Styles.text.item, Styles.list.ellipsis);
         d.onclick = () => jump(q.id);
         frag.appendChild(d);
       });
+    }
+
+    const statsBlock = createTalkStatsBlock(rawLines);
+    if (statsBlock) {
+      frag.appendChild(statsBlock);
     }
 
     body.replaceChildren(frag);
   };
 
   /* =============== Watcher ========================= */
-  const paperIntroWatcher = createPageWatcher({
-    onUpdate: ({ project, page, lines }) => {
-      if (!isPaperIntroPage(lines)) return;
-      renderPaperPanelFromLines(project, page, lines);
+  const paperIntroWatcher = new PageWatcher({
+    fetchPage,
+    getRevision: j => j.updated,
+
+    onInit: ({ project, page, json }) => {
+      if (!isPaperIntroPage(json.lines)) return;
+      renderPaperPanelFromLines(project, page, json.lines);
+    },
+
+    onUpdate: ({ project, page, json }) => {
+      if (!isPaperIntroPage(json.lines)) return;
+      renderPaperPanelFromLines(project, page, json.lines);
     }
   });
 
-  const researchNoteWatcher = createPageWatcher({
-    onUpdate: ({ project, page, lines, json }) => {
+  const researchNoteWatcher = new PageWatcher({
+    fetchPage,
+    getRevision: j => j.updated,
+
+    onInit: ({ project, page, json }) => {
+      renderCalendar(project, page);              // ★ 追加
       updateCalendarFromLines(project, page, json);
-      renderTodoPanel(project, page, lines);
+      renderTodoPanel(project, page, json.lines);
+    },
+
+    onUpdate: ({ project, page, json }) => {
+      updateCalendarFromLines(project, page, json);
+      renderTodoPanel(project, page, json.lines);
     }
   });
 
-  const minutesWatcher = createPageWatcher({
-    onUpdate: ({ project, page, lines }) => {
-      if (/発表練習/.test(page)) {
-        renderPresentationTrainingFromLines(project, page, lines);
-      } else {
-        renderMinutesFromLines(project, page, lines);
-      }
+  const renderMinutesByType = (project, page, json) => {
+    const lines = json.lines || [];
+    if (/発表練習/.test(page)) {
+      renderPresentationTrainingFromLines(project, page, lines);
+    } else {
+      renderMinutesFromLines(project, page, lines);
+    }
+  };
+
+  const minutesWatcher = new PageWatcher({
+    fetchPage,
+    getRevision: j => j.updated,
+
+    onInit: ({ project, page, json }) => {
+      renderMinutesByType(project, page, json);
+    },
+
+    onUpdate: ({ project, page, json }) => {
+      renderMinutesByType(project, page, json);
     }
   });
 
-  /* ================= SPA用 =================== */
+  /* ================= SPA監視 ================= */
+
   const classifyPage = (page, lines) => {
     if (!page) return 'project-top';
     if (/研究ノート/.test(page)) return 'research-note';
@@ -1162,11 +1312,25 @@
     minutesWatcher?.stop();
   };
 
-  /* ================= SPA監視 ================= */
+  const route = (project, page, json) => {
+    // ページなしは呼ばれない前提
+    const lines = normalizeLines(json.lines);
+    const type = classifyPage(page, lines);
+    const handlers = {
+      'research-note': () => researchNoteWatcher.start(project, page),
+      'experiment-plan': () => renderExperimentPlan(project, page),
+      'paper-intro': () => paperIntroWatcher.start(project, page),
+      'presentation-training': () => minutesWatcher.start(project, page),
+      'minutes': () => minutesWatcher.start(project, page),
+    };
+
+    handlers[type]?.();
+  };
 
   let lastKey = null;
+
   const tick = async () => {
-    const key = location.pathname + location.hash;
+    const key = location.pathname;
     if (key === lastKey) return;
     lastKey = key;
 
@@ -1177,57 +1341,21 @@
     if (!m) return;
 
     const project = m[1];
-    const pageRaw = m[2];
-    const page =
-      pageRaw && pageRaw.length > 0
-        ? decodeURIComponent(pageRaw)
-        : null;
+    const page = m[2] ? decodeURIComponent(m[2]) : null;
 
     saveHistory(project, page);
 
-    /* ==================
-    * ページなし：プロジェクトトップ
-    * ================== */
+    // プロジェクトトップ
     if (!page) {
       renderProjectTop(project);
       return;
     }
 
-    /* ==================
-    * ページあり：中身を見る
-    * ================== */
+    // ページあり
     const json = await fetchPage(project, page);
     if (!json) return;
 
-    const lines = normalizeLines(json.lines);
-    const type = classifyPage(page, lines);
-
-    switch (type) {
-
-      case 'research-note':
-        renderCalendar(project, page);
-        researchNoteWatcher.start(project, page);
-        break;
-
-      case 'experiment-plan':
-        renderExperimentPlan(project, page);
-        break;
-
-      case 'paper-intro':
-        renderPaperPanelFromLines(project, page, lines);
-        paperIntroWatcher.start(project, page);
-        break;
-
-      case 'presentation-training':
-        renderPresentationTrainingFromLines(project, page, lines);
-        minutesWatcher.start(project, page);
-        break;
-
-      case 'minutes':
-        renderMinutesFromLines(project, page, lines);
-        minutesWatcher.start(project, page);
-        break;
-    }
+    route(project, page, json);
   };
 
   setInterval(tick, 600);
