@@ -225,20 +225,10 @@
   };
 
   /* =================== 表示関係の共通関数 ====================== */
-  const appendLink = (panelNode, label, pageName, prefix = '•') => {
-    const d = document.createElement('div');
-    d.textContent = prefix + label;
-    d.style = 'cursor:pointer;padding-left:6px';
-    d.onclick = () => location.assign(`/${currentProjectName}/${encodeURIComponent(pageName)}`);
-    panelNode.appendChild(d);
-  };
-
   const renderPageTitle = (parentNode, rawLines) => {
     if (!rawLines || !rawLines.length) return;
-
     const text = (rawLines[0].text || '').trim();
     if (!text) return;
-
     appendPanelTitle(parentNode, '📌 ' + text, () => jumpToLineId(rawLines[0].id));
   };
 
@@ -251,14 +241,12 @@
   };
 
   const appendTextNode = (parentNode, text, style, onClick) => {
-    const headerNode = document.createElement('div');
-    headerNode.textContent = text;
-    applyStyle(headerNode, style);
-    if (onClick) {
-      headerNode.onclick = onClick;
-    }
-    parentNode.appendChild(headerNode);
-    return headerNode;
+    const textNode = document.createElement('div');
+    textNode.textContent = text;
+    applyStyle(textNode, style);
+    if (onClick) textNode.onclick = onClick;
+    parentNode.appendChild(textNode);
+    return textNode;
   };
 
   const attachCloseButton = (panelNode, panelId) => {
@@ -511,7 +499,7 @@
 
     appendSectionHeader(panelNode, '🕒 最近見たページ');
     items.forEach(item => {
-      appendLink(panelNode, item.pageName, item.pageName);
+      appendTextNode(panelNode, '・' + item.pageName, [Styles.text.item, Styles.list.ellipsis].join(""), () => location.assign(`/${currentProjectName}/${encodeURIComponent(pageName)}`));
     });
   };
 
@@ -528,7 +516,7 @@
 
     appendSectionHeader(panelNode, '⭐ よく見ているページ');
     items.forEach(([pageName, count]) => {
-      appendLink(panelNode, `${pageName} (${count})`, pageName);
+      appendTextNode(panelNode, '・' + `${pageName} (${count})`, [Styles.text.item, Styles.list.ellipsis].join(""), () => location.assign(`/${currentProjectName}/${encodeURIComponent(pageName)}`));
     });
   };
 
@@ -540,7 +528,7 @@
     const ym = `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}`;
     const pageName = `${ym}_研究ノート_${setting.userName}`;
     appendSectionHeader(panelNode, '🧑 自分の研究ノート');
-    appendLink(panelNode, pageName, pageName, '📅 ');
+    appendTextNode(panelNode, '📅 ' + pageName, [Styles.text.item, Styles.list.ellipsis].join(""), () => location.assign(`/${currentProjectName}/${encodeURIComponent(pageName)}`));
   };
 
   const renderProjectTop = () => {
