@@ -508,7 +508,7 @@
 
     appendSectionHeader(panelNode, '🕒 最近見たページ');
     items.forEach(item => {
-      appendTextNode(panelNode, '・' + item.pageName, [Styles.text.item, Styles.list.ellipsis].join(""), () => location.assign(`/${currentProjectName}/${encodeURIComponent(pageName)}`));
+      appendTextNode(panelNode, '・' + item.pageName, [Styles.text.item, Styles.list.ellipsis].join(""), () => location.assign(`/${currentProjectName}/${encodeURIComponent(item.pageName)}`));
     });
   };
 
