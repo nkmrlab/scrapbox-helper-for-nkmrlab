@@ -12,6 +12,7 @@
   const MAIN_TITLE_ID = '__sb_minutes_title__';
   const CALENDAR_ID = '__sb_calendar_panel__';
   const CALENDAR_GRID_CLASS = '__sb_calendar_grid__';
+  const CALENDAR_CREATE_UI_ID = '__sb_create_note_ui__';
 
   const closedPanels = new Set();
   let currentProjectName = null;
@@ -80,6 +81,13 @@
         grid-template-columns:repeat(7,1fr);
         grid-template-rows:auto repeat(6,1fr);
         gap:2px;
+      `,
+      createUI: `
+        margin:6px;
+        padding:6px;
+        border:1px dashed #ccc;
+        font-size:11px;
+        background:#fafafa;
       `
     },
 
@@ -354,6 +362,7 @@
     chrome.storage.local.get(
       { [settingsKey(projectName)]: DEFAULT_SETTINGS },
       data => {
+        if (!isExtensionAlive()) return;
         cb({ ...DEFAULT_SETTINGS, ...data[settingsKey(projectName)] });
       }
     );
@@ -598,7 +607,7 @@
     const headerNode = document.createElement('div');
     applyStyle(headerNode, Styles.calendar.header);
 
-    const btn = (label, fn) => {
+    const createButton = (label, fn) => {
       const s = document.createElement('span');
       s.textContent = label;
       s.style = 'cursor:pointer';
@@ -607,23 +616,23 @@
     };
 
     headerNode.append(
-      btn('◀', () => {
+      createButton('◀', () => {
         const np = shiftMonthInPageName(pageName, -1);
         if (np) location.assign(`/${currentProjectName}/${encodeURIComponent(np)}`);
       }),
       document.createTextNode(
         ym ? `${ym[1]}年${parseInt(ym[2], 10)}月` : ''
       ),
-      btn('▶', () => {
+      createButton('▶', () => {
         const np = shiftMonthInPageName(pageName, 1);
         if (np) location.assign(`/${currentProjectName}/${encodeURIComponent(np)}`);
       }),
       Object.assign(document.createElement('span'), { style: 'margin-left:auto' }),
-      btn('今月へ', () => {
+      createButton('今月へ', () => {
         const np = todayPage(pageName);
         if (np) location.assign(`/${currentProjectName}/${encodeURIComponent(np)}`);
       }),
-      btn('✕', () => {
+      createButton('✕', () => {
         closedPanels.add(CALENDAR_ID);
         panelNode.remove();
       })
@@ -643,7 +652,6 @@
 
     panelNode.append(headerNode, gridNode);
     document.body.appendChild(panelNode);
-
     return panelNode;
   };
 
@@ -664,6 +672,11 @@
     // 曜日行（7個）だけ残す
     while (gridNode.children.length > 7) {
       gridNode.removeChild(gridNode.lastChild);
+    }
+
+    if (countDateHeaders(json.lines) > 0) {
+      creatingResearchNoteFor = null;
+      removeResearchNoteCreateUI();
     }
 
     const days = {}, snip = {};
@@ -737,6 +750,108 @@
     });
   };
 
+  const WEEK_LABELS = ['日', '月', '火', '水', '木', '金', '土'];
+  const generateResearchNoteBody = (date, userName) => {
+    const year  = date.getFullYear();
+    const month = date.getMonth(); // 0-based
+    const ym = `${year}.${String(month + 1).padStart(2, '0')}`;
+
+    const prev = new Date(year, month - 1, 1);
+    const next = new Date(year, month + 1, 1);
+    const prevYm = `${prev.getFullYear()}.${String(prev.getMonth() + 1).padStart(2, '0')}`;
+    const nextYm = `${next.getFullYear()}.${String(next.getMonth() + 1).padStart(2, '0')}`;
+
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    let body = `#${prevYm}_研究ノート_${userName} ` + `#${nextYm}_研究ノート_${userName} #研究ノート_${userName}\n\n`;
+
+    for (let d = 1; d <= lastDay; d++) {
+      const day = new Date(year, month, d);
+      const w   = WEEK_LABELS[day.getDay()];
+      const label = `${year}.${String(month + 1).padStart(2, '0')}.${String(d).padStart(2, '0')}`;
+      body += `[*( ${label} (${w})]\n\n\n`;
+    }
+
+    body += `#研究ノート\n\n`;
+    return body;
+  };
+
+  const isMyResearchNotePage = (pageName, userName) => {
+    if (!pageName || !userName) return false;
+    return pageName.includes(`研究ノート_${userName}`);
+  };
+
+  const buildCreateNoteUrl = (project, pageName, body) => {
+    return (`https://scrapbox.io/${project}/${encodeURIComponent(pageName)}` + `?body=${encodeURIComponent(body)}`);
+  };
+
+  const countDateHeaders = (lines) => {
+    return lines.filter(line =>
+      /^\[\*\(\s*20\d{2}\.\d{2}\.\d{2}/.test(line.text || '')
+    ).length;
+  };
+
+  const removeResearchNoteCreateUI = () => {
+    document.getElementById(CALENDAR_CREATE_UI_ID)?.remove();
+  };
+
+  const renderResearchNoteCreateUI = ({ setting, pageName, rawLines }) => {
+    if (!pageName) return;
+    if (!/研究ノート/.test(pageName)) return;
+    if (!setting?.userName) return;
+
+    // 自分の研究ノート以外は出さない 
+    if (!isMyResearchNotePage(pageName, setting.userName)) return;
+    
+    const calendarPanel = document.getElementById(CALENDAR_ID);
+    if (!calendarPanel) return;
+
+    // すでに生成済みなら何もしない
+    if (countDateHeaders(rawLines) > 0) return;
+
+    // 対象年月を pageName から取得
+    const baseDate = extractYearMonthFromPageName(pageName);
+    if (!baseDate) return;
+
+    // 二重表示防止
+    if (calendarPanel.querySelector('#' + CALENDAR_CREATE_UI_ID)) return;
+
+    const box = document.createElement('div');
+    box.id = CALENDAR_CREATE_UI_ID;
+    box.style = Styles.calendar.createUI;
+
+    const ym = `${baseDate.getFullYear()}.` + `${String(baseDate.getMonth() + 1).padStart(2, '0')}`;
+    const msg = document.createElement('div');
+    msg.textContent = `⚠ ${ym} の研究ノートがまだ作成されていません`;
+    msg.style = 'margin-bottom:6px;color:#555;';
+    box.appendChild(msg);
+
+    const btn = document.createElement('button');
+    btn.textContent = `${ym} の研究ノートを作成する（作成後に書き込みするとこのボタンは消えます）`;
+    btn.onclick = () => {
+      const targetPage = `${ym}_研究ノート_${setting.userName}`;
+      researchNoteWatcher.stop();
+
+      const body = generateResearchNoteBody(baseDate, setting.userName);
+      const url = buildCreateNoteUrl(currentProjectName, targetPage, body);
+      removeResearchNoteCreateUI();
+      location.assign(url);
+    };
+
+    box.appendChild(btn);
+
+    // CALENDAR パネルの上に表示
+    calendarPanel.prepend(box);
+  };
+
+  const extractYearMonthFromPageName = (pageName) => {
+    const m = pageName.match(/(20\d{2})\.(\d{2})/);
+    if (!m) return null;
+
+    const year  = Number(m[1]);
+    const month = Number(m[2]) - 1; // JS Date は 0-based
+    return new Date(year, month, 1);
+  };
+
   /* ================= 実験計画書 ================= */
   const createExperimentPlanPanel = () => {
     const panelNode = document.createElement('div');
@@ -802,13 +917,8 @@
     const sessions = [];
     let cur = null;
 
-    // const isTitleLine = t =>
-    //   (/^\[[\*\(\&]*[\(\&][\*\(\&]*\s+/.test(t) && !/^\[\*{1,2}\s/.test(t)) ||
-    //   /^タイトル\s*[:：『「]/.test(t);
-
     lines.forEach(line => {
       // セッション開始（[() 系）
-      //if (/^\[\(/.test(line.text)) {
       if (isSessionStart(line.text)) {
         cur = {
           id: line.id,
@@ -1029,18 +1139,67 @@
 
     appendSectionHeader(parentNode, '📊 発言数');
 
-    const max = Math.max(...entries.map(e => e[1]), 1);
+    const max = Math.max(...entries.map(([, v]) => v), 1);
+
     entries
       .sort((a, b) => b[1] - a[1])
-      .forEach(([uid, v]) => {
+      .forEach(([uid, count]) => {
         const name = idToName[uid] || uid;
-        const d = document.createElement('div');
-        d.innerHTML =
-          `<div style="font-size:11px">${name} (${v})</div>` +
-          `<div style="background:#4caf50;height:6px;width:${(v / max) * 100}%"></div>`;
-        parentNode.appendChild(d);
+
+        const row = document.createElement('div');
+        row.style =
+          'display:flex;' +
+          'align-items:center;' +
+          'margin:4px 0;' +
+          'overflow:hidden';
+
+        const label = document.createElement('div');
+        label.textContent = name;
+        label.style =
+          'width:5em;' +
+          'font-size:11px;' +
+          'white-space:nowrap;' +
+          'overflow:hidden;' +
+          'text-overflow:ellipsis';
+
+        const right = document.createElement('div');
+        right.style =
+          'flex:1;' +
+          'display:flex;' +
+          'align-items:center;' +
+          'gap:6px;' +
+          'overflow:hidden';
+
+        const barWrap = document.createElement('div');
+        barWrap.style =
+          'flex:1;' +
+          'background:#fff;' +
+          'height:6px;' +
+          'overflow:hidden';
+
+        const bar = document.createElement('div');
+        bar.style =
+          'background:#4caf50;' +
+          'height:100%;' +
+          `width:${(count / max) * 100}%`;
+
+        barWrap.appendChild(bar);
+
+        const value = document.createElement('div');
+        value.textContent = count;
+        value.style =
+          'font-size:11px;' +
+          'min-width:2em;' +
+          'text-align:right;' +
+          'flex-shrink:0';
+
+        right.append(barWrap, value);
+        row.append(label, right);
+        parentNode.appendChild(row);
       });
   };
+
+
 
   /* ================= 発表練習パネル =============== */
   const createPresentationTrainingPanel = () => {
@@ -1157,8 +1316,6 @@
 
     let title = null;
     let titleId = null;
-    let abstractId = null;
-    let qnaId = null;
 
     lines.forEach(line => {
       if (!title && line.text) {
@@ -1245,10 +1402,17 @@
     fetchPage,
     getRevision: j => j.updated,
 
-    onInit: ({pageName, json }) => {
-      renderCalendar(pageName);              // ★ 追加
-      renderCalendarFromLines(json);
-      renderTodoPanel(json.lines);
+    onInit: ({ pageName, json }) => {
+      loadSettings(currentProjectName, setting => {
+        renderCalendar(pageName);
+        renderCalendarFromLines(json);
+        renderResearchNoteCreateUI({
+          setting,
+          pageName,
+          rawLines: json.lines
+        });
+        renderTodoPanel(json.lines);
+      });
     },
 
     onUpdate: ({ pageName, json }) => {
@@ -1311,14 +1475,14 @@
     handlers[type]?.();
   };
 
-  let lastKey = null;
+  let lastURL = null;
 
   const tick = async () => {
     if (!isExtensionAlive()) return;
 
-    const key = location.pathname;
-    if (key === lastKey) return;
-    lastKey = key;
+    const url = location.pathname;
+    if (url === lastURL) return;
+    lastURL = url;
 
     clearUI();
     stopAllWatchers();
@@ -1335,16 +1499,30 @@
 
     // プロジェクトトップ
     if (!pageName) {
+      if (!isExtensionAlive()) return;
       renderProjectTop();
       return;
     }
 
     // ページあり
     const json = await fetchPage(currentProjectName, pageName);
+    if (!isExtensionAlive()) return;
     if (!json) return;
 
     route(pageName, json);
   };
+
+  document.addEventListener('visibilitychange', () => {
+    
+    if (document.hidden) {
+      //console.log("stop watchers");
+      stopAllWatchers();
+    } else {
+      //console.log("start watchers");
+      lastURL = null;
+      tick();
+    }
+  });
 
   setInterval(tick, 600);
   tick();
