@@ -164,11 +164,28 @@
 
   const fetchPage = async (projectName, pageName) => {
     if (projectName === null) return null;
+    //console.log("get :" + projectName + "/" + pageName);
     const r = await fetch(
       `https://scrapbox.io/api/pages/${projectName}/${encodeURIComponent(pageName)}`
     );
     if (!r.ok) return null;
     return r.json();
+  };
+
+  const headPageETag = async (projectName, pageName) => {
+    //console.log("head:" + projectName + "/" + pageName);
+    try {
+      const r = await fetch(
+        `https://scrapbox.io/api/pages/${projectName}/${encodeURIComponent(pageName)}`,
+        { method: 'HEAD' }
+      );
+      if (!r.ok) return null;
+      // W/"XXXXX-YYYYYY ... という形式になってて、W/"以降の5文字がページの更新情報っぽい
+      console.log(r.headers.get('etag').substring(3, 8));
+      return r.headers.get('etag').substring(3, 8);
+    } catch {
+      return null;
+    }
   };
 
   const isPaperIntroPage = (lines) =>
@@ -410,57 +427,81 @@
     constructor({
       interval = 10000,
       fetchPage,
-      getRevision,
+      headPageETag,
       onInit,
       onUpdate
     }) {
       this.interval = interval;
       this.fetchPage = fetchPage;
-      this.getRevision = getRevision;
+      this.headPageETag = headPageETag;
       this.onInit = onInit;
       this.onUpdate = onUpdate;
 
       this.timer = null;
-      this.lastRevision = null;
-      this.isWarmedUp = false;
+      this.lastETag = null;
+      this.warmedUp = false;
+      this.inflight = false;
     }
 
-    start(pageName) {
-      this.stop();
+    async _run(projectName, pageName) {
+      if (this.inflight) return;
+      this.inflight = true;
 
-      const run = async () => {
-        const json = await this.fetchPage(currentProjectName, pageName);
-        if (!json) return;
+      try {
+        /* ========= 初回：必ず GET ========= */
+        if (!this.warmedUp) {
+          const json = await this.fetchPage(projectName, pageName);
+          if (!json) return;
 
-        const revision = this.getRevision(json);
+          // 初回 GET 後に ETag を確定
+          this.lastETag = await this.headPageETag(projectName, pageName);
+          this.warmedUp = true;
 
-        // 初回：baseline 設定のみ
-        if (!this.isWarmedUp) {
-          this.lastRevision = revision;
-          this.isWarmedUp = true;
-          this.onInit?.({ pageName, json });
+          this.onInit?.({ projectName, pageName, json });
+          return;
+        }
+
+        /* ========= 通常：HEAD ========= */
+        const etag = await this.headPageETag(projectName, pageName);
+
+        // HEAD 失敗時は安全に GET
+        if (!etag) {
+          const json = await this.fetchPage(projectName, pageName);
+          if (!json) return;
+          this.onUpdate?.({ projectName, pageName, json });
           return;
         }
 
         // 変更なし
-        if (revision === this.lastRevision) return;
+        if (etag === this.lastETag) return;
 
-        // 変更あり
-        this.lastRevision = revision;
-        this.onUpdate({ pageName, json });
-      };
+        // 変更あり → GET
+        this.lastETag = etag;
+        const json = await this.fetchPage(projectName, pageName);
+        if (!json) return;
 
-      run();
-      this.timer = setInterval(run, this.interval);
+        this.onUpdate?.({ projectName, pageName, json });
+      } finally {
+        this.inflight = false;
+      }
+    }
+
+    start(projectName, pageName) {
+      this.stop();
+      const tick = () => this._run(projectName, pageName);
+      tick();
+      this.timer = setInterval(tick, this.interval);
     }
 
     stop() {
       if (this.timer) clearInterval(this.timer);
       this.timer = null;
-      this.lastRevision = null;
-      this.isWarmedUp = false;
+      this.lastETag = null;
+      this.warmedUp = false;
+      this.inflight = false;
     }
   }
+
 
   /* ================= 履歴管理 ================= */
   const saveHistory = (projectName, pageName) => {
@@ -1385,7 +1426,7 @@
   /* =============== Watcher ========================= */
   const paperIntroWatcher = new PageWatcher({
     fetchPage,
-    getRevision: j => j.updated,
+    headPageETag,
 
     onInit: ({ pageName, json }) => {
       if (!isPaperIntroPage(json.lines)) return;
@@ -1400,7 +1441,7 @@
 
   const researchNoteWatcher = new PageWatcher({
     fetchPage,
-    getRevision: j => j.updated,
+    headPageETag,
 
     onInit: ({ pageName, json }) => {
       loadSettings(currentProjectName, setting => {
@@ -1423,7 +1464,7 @@
 
   const minutesWatcher = new PageWatcher({
     fetchPage,
-    getRevision: j => j.updated,
+    headPageETag,
 
     onInit: ({ pageName, json }) => {
       renderMinutesByType(pageName, json);
@@ -1444,14 +1485,13 @@
   };
 
   /* ================= SPA監視 ================= */
-
-  const classifyPage = (pageName, lines) => {
+  const classifyPageByName = (pageName) => {
     if (!pageName) return 'project-top';
     if (/研究ノート/.test(pageName)) return 'research-note';
     if (/実験計画書/.test(pageName)) return 'experiment-plan';
     if (/発表練習/.test(pageName)) return 'presentation-training';
-    if (isPaperIntroPage(lines)) return 'paper-intro';
-    return 'minutes';
+    if (/議事録/.test(pageName)) return 'minutes';
+    return 'unknown';
   };
 
   const stopAllWatchers = () => {
@@ -1461,18 +1501,12 @@
   };
 
   const route = (pageName, json) => {
-    // ページなしは呼ばれない前提
     const lines = normalizeLines(json.lines);
-    const type = classifyPage(pageName, lines);
-    const handlers = {
-      'research-note': () => researchNoteWatcher.start(pageName),
-      'experiment-plan': () => renderExperimentPlan(pageName),
-      'paper-intro': () => paperIntroWatcher.start(pageName),
-      'presentation-training': () => minutesWatcher.start(pageName),
-      'minutes': () => minutesWatcher.start(pageName),
-    };
-
-    handlers[type]?.();
+    if (isPaperIntroPage(lines)){
+      paperIntroWatcher.start(pageName);
+    } else {
+      minutesWatcher.start(pageName);
+    }
   };
 
   let lastURL = null;
@@ -1504,12 +1538,23 @@
       return;
     }
 
-    // ページあり
-    const json = await fetchPage(currentProjectName, pageName);
-    if (!isExtensionAlive()) return;
-    if (!json) return;
-
-    route(pageName, json);
+    const type = classifyPageByName(pageName);
+    if (type !== 'unknown') {
+      const handlers = {
+        'research-note': () => researchNoteWatcher.start(currentProjectName, pageName),
+        'experiment-plan': () => renderExperimentPlan(pageName),
+        'paper-intro': () => paperIntroWatcher.start(currentProjectName, pageName),
+        'presentation-training': () => minutesWatcher.start(currentProjectName, pageName),
+        'minutes': () => minutesWatcher.start(currentProjectName, pageName),
+      };
+      handlers[type]?.();
+    } else {
+      // ページあり
+      const json = await fetchPage(currentProjectName, pageName);
+      if (!isExtensionAlive()) return;
+      if (!json) return;
+      route(pageName, json);
+    }
   };
 
   document.addEventListener('visibilitychange', () => {
