@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Scrapbox Research Helper",
-  "version": "0.1.0",
-  "description": "Calendar, outline, minutes, and project-top history helper for Scrapbox",
+  "name": "Labo Scrapbox Helper",
+  "version": "0.1.1",
+  "description": "Scrapbox Helper for Research Labs: Calendars, Outlines, Minutes, and Project Histories",
   "permissions": ["storage"],
   "content_scripts": [
     {
