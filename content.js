@@ -76,6 +76,7 @@
       `,
       grid: `
         flex:1;
+        min-height:0;
         padding:6px;
         display:grid;
         grid-template-columns:repeat(7,1fr);
@@ -181,7 +182,7 @@
       );
       if (!r.ok) return null;
       // W/"XXXXX-YYYYYY ... という形式になってて、W/"以降の5文字がページの更新情報っぽい
-      console.log(r.headers.get('etag').substring(3, 8));
+      //console.log(r.headers.get('etag').substring(3, 8));
       return r.headers.get('etag').substring(3, 8);
     } catch {
       return null;
@@ -305,7 +306,7 @@
     userName: '',
     panelWidth: 480,
     panelHeight: 560,
-    calendarFontSize: 9,
+    calendarFontSize: 11,
     idleOpacity: 0.35,
     todoMark: '[_]',      // TODO を示す文字列（正規表現ではない）
     doneMark: '[x]'       // 完了を示す文字列
@@ -725,7 +726,7 @@
 
     for (const line of json.lines) {
       let text = (line.text || '').trim();
-      const mm = text.match(/^\[\*\(\s*(20\d{2})\.(\d{2})\.(\d{2})/);
+      const mm = text.match(/^\[[\*\(]+\s*(20\d{2})\.(\d{2})\.(\d{2})/);
       if (mm) {
         cur = `${mm[1]}.${mm[2]}.${mm[3]}`;
         days[cur] = line.id;
@@ -781,8 +782,8 @@
         const p = document.createElement('div');
         p.textContent = t;
         p.style =
-          'font-size:0.9em;color:#555;white-space:nowrap;' +
-          'overflow:hidden;text-overflow:ellipsis;line-height:1.1';
+          'font-size:0.9em;color:#555;line-height:1.2;white-space:nowrap;' +
+          'overflow:hidden;text-overflow:ellipsis;flex:0 0 auto';
         c.appendChild(p);
       });
 
@@ -1007,6 +1008,10 @@
   const createTodoPanel = () => {
     const panelNode = document.createElement('div');
     applyStyle(panelNode, Styles.panel.base, Styles.panelTodo);
+    const calendarPanel = document.getElementById(CALENDAR_ID);
+    if (calendarPanel !== null) {
+      panelNode.style.right = calendarPanel.offsetWidth + 20 + 'px';
+    }
     applyPanelSettings(panelNode);
     return panelNode;
   };
@@ -1500,12 +1505,12 @@
     minutesWatcher?.stop();
   };
 
-  const route = (pageName, json) => {
+  const route = (projectName, pageName, json) => {
     const lines = normalizeLines(json.lines);
     if (isPaperIntroPage(lines)){
-      paperIntroWatcher.start(pageName);
+      paperIntroWatcher.start(projectName, pageName);
     } else {
-      minutesWatcher.start(pageName);
+      minutesWatcher.start(projectName, pageName);
     }
   };
 
@@ -1553,7 +1558,7 @@
       const json = await fetchPage(currentProjectName, pageName);
       if (!isExtensionAlive()) return;
       if (!json) return;
-      route(pageName, json);
+      route(currentProjectName, pageName, json);
     }
   };
 
