@@ -59,6 +59,17 @@
       flex-direction:column;
     `,
 
+    panelCalendarExpanded: `
+      top: 2vh;
+      left: 2vw;
+      right: 2vw;
+      bottom: 2vh;
+      width: auto;
+      height: auto;
+      max-width: none;
+      max-height: none;
+    `,
+
     panelMain: `
       width:480px;
       max-height:560px;
@@ -82,6 +93,10 @@
         grid-template-columns:repeat(7,1fr);
         grid-template-rows:auto repeat(6,1fr);
         gap:2px;
+      `,
+      gridExpanded: `
+        grid-template-rows: auto repeat(6, minmax(140px, 1fr));
+        gap: 8px;
       `,
       createUI: `
         margin:6px;
@@ -620,32 +635,36 @@
   };
 
   /* ================= 研究ノート：月カレンダー（完全版） ================= */
+  const applyTodayStyle = (cell) => {
+    cell.style.boxShadow = 'inset 0 0 0 2px rgba(160,0,0,0.6)';
+  };
+
   const createCalendarPanel = (pageName) => {
     const panelNode = document.createElement('div');
     applyStyle(panelNode, Styles.panel.base, Styles.panelCalendar);
     applyPanelSettings(panelNode);
 
-    const shiftMonthInPageName = (pageName, monthOffset) => {
-      const match = pageName.match(/(20\d{2})\.(\d{2})/);
-      if (!match) return null;
-      let year  = Number(match[1]);
-      let month = Number(match[2]) + monthOffset;
-      if (month === 0)  { year--; month = 12; }
-      if (month === 13) { year++; month = 1; }
-      const newYm = `${year}.${String(month).padStart(2, '0')}`;
-      return pageName.replace(/20\d{2}\.\d{2}/, newYm);
+    /* ========== 月操作ユーティリティ ========== */
+    const shiftMonthInPageName = (pageName, offset) => {
+      const m = pageName.match(/(20\d{2})\.(\d{2})/);
+      if (!m) return null;
+      let y = +m[1], mo = +m[2] + offset;
+      if (mo === 0)  { y--; mo = 12; }
+      if (mo === 13) { y++; mo = 1; }
+      return pageName.replace(/20\d{2}\.\d{2}/, `${y}.${String(mo).padStart(2,'0')}`);
     };
 
-    const todayPage = pageName => {
-      const date = new Date();
+    const todayPage = (pageName) => {
+      const d = new Date();
       return pageName.replace(
         /20\d{2}\.\d{2}/,
-        `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2,'0')}`
+        `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}`
       );
     };
 
     const ym = pageName.match(/(20\d{2})\.(\d{2})/);
 
+    /* ========== Header ========== */
     const headerNode = document.createElement('div');
     applyStyle(headerNode, Styles.calendar.header);
 
@@ -657,40 +676,124 @@
       return s;
     };
 
+    /* ========== Grid ========== */
+    const gridNode = document.createElement('div');
+    gridNode.className = CALENDAR_GRID_CLASS;
+
+    let calendarExpanded = false;
+
+    const applyCalendarFontSize = (gridNode) => {
+      loadSettings(currentProjectName, setting => {
+        gridNode.style.fontSize = setting.calendarFontSize + 'px';
+      });
+    };
+
+    const applyCalendarLayout = () => {
+      if (calendarExpanded) {
+        applyStyle(
+          panelNode,
+          Styles.panel.base,
+          Styles.panelCalendar,
+          Styles.panelCalendarExpanded
+        );
+        applyStyle(
+          gridNode,
+          Styles.calendar.grid,
+          Styles.calendar.gridExpanded
+        );
+
+        // TODO パネルを隠す
+        document.getElementById(TODO_PANEL_ID)
+          ?.style.setProperty('display', 'none');
+      } else {
+        applyStyle(
+          panelNode,
+          Styles.panel.base,
+          Styles.panelCalendar
+        );
+        applyStyle(
+          gridNode,
+          Styles.calendar.grid
+        );
+
+        // TODO パネルを戻す
+        const todo = document.getElementById(TODO_PANEL_ID);
+        if (todo) todo.style.removeProperty('display');
+      }
+      applyCalendarFontSize(gridNode);
+    };
+
+    /* ========== 曜日行 ========== */
+    ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(w => {
+      appendTextNode(
+        gridNode,
+        w,
+        [Styles.text.sectionTitle, 'text-align:center'].join('')
+      );
+    });
+
+    applyCalendarLayout();
+    /* ========== Heatmap 関数 ========== */
+    panelNode.__applyHeatmap = (cellNode, count) => {
+      //if (!calendarExpanded) return;
+
+      const level =
+        count === 0 ? 0 :
+        count <= 2 ? 1 :
+        count <= 5 ? 2 :
+        count <= 10 ? 3 : 4;
+
+      const COLORS = [
+        'transparent',
+        'rgba(0,150,0,0.10)',
+        'rgba(0,150,0,0.20)',
+        'rgba(0,150,0,0.35)',
+        'rgba(0,150,0,0.55)',
+      ];
+
+      cellNode.style.background = COLORS[level];
+    };
+    /* ========== Expand トグル ========== */
+    const toggleBtn = createButton('[拡大]', () => {
+      calendarExpanded = !calendarExpanded;
+      applyCalendarLayout();
+      toggleBtn.textContent = calendarExpanded ? '[縮小]' : '[拡大]';
+
+      // expanded 切替時に全セルへ再適用
+      gridNode.querySelectorAll('[data-day-cell]').forEach(c => {
+        if (calendarExpanded) {
+          const count = Number(c.dataset.count || 0);
+          panelNode.__applyHeatmap(c, count);
+        } else {
+          c.style.background = '';
+        }
+      });
+    });
+
+    /* ========== Header 組み立て ========== */
     headerNode.append(
       createButton('◀', () => {
         const np = shiftMonthInPageName(pageName, -1);
         if (np) location.assign(`/${currentProjectName}/${encodeURIComponent(np)}`);
       }),
-      document.createTextNode(
-        ym ? `${ym[1]}年${parseInt(ym[2], 10)}月` : ''
-      ),
+      document.createTextNode(ym ? `${ym[1]}年${parseInt(ym[2],10)}月` : ''),
       createButton('▶', () => {
         const np = shiftMonthInPageName(pageName, 1);
         if (np) location.assign(`/${currentProjectName}/${encodeURIComponent(np)}`);
       }),
       Object.assign(document.createElement('span'), { style: 'margin-left:auto' }),
-      createButton('今月へ', () => {
+      createButton('[今月へ]', () => {
         const np = todayPage(pageName);
         if (np) location.assign(`/${currentProjectName}/${encodeURIComponent(np)}`);
       }),
+      toggleBtn,
       createButton('✕', () => {
         closedPanels.add(CALENDAR_ID);
         panelNode.remove();
+        document.getElementById(TODO_PANEL_ID)
+          ?.style.removeProperty('display');
       })
     );
-
-    const gridNode = document.createElement('div');
-    gridNode.className = CALENDAR_GRID_CLASS;
-    applyStyle(gridNode, Styles.calendar.grid);
-
-    loadSettings(currentProjectName, setting => {
-      gridNode.style.fontSize = setting.calendarFontSize + 'px';
-    });
-
-    ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(weekDay => {
-      appendTextNode(gridNode, weekDay, [Styles.text.sectionTitle, 'text-align:center'].join(""));
-    });
 
     panelNode.append(headerNode, gridNode);
     document.body.appendChild(panelNode);
@@ -765,27 +868,36 @@
       const c = document.createElement('div');
       c.style =
         'border:1px solid #ddd;padding:2px;cursor:pointer;' +
-        'display:flex;flex-direction:column;gap:1px;overflow:hidden';
-      if (d === today) c.style.background = 'rgba(0,200,0,0.18)';
+        'display:flex;flex-direction:column;gap:2px;overflow:hidden;min-height: 0';
 
+      /* 日付 */
       const dd = document.createElement('div');
       dd.textContent = d.split('.').pop();
       dd.style = 'font-weight:bold;line-height:1';
-
-      const wd = new Date(d.replace(/\./g, '-')).getDay();
-      if (wd === 0) dd.style.color = 'red';
-      if (wd === 6) dd.style.color = 'blue';
-
       c.appendChild(dd);
 
+      /* 書き込みリスト */
       (snip[d] || []).forEach(t => {
         const p = document.createElement('div');
         p.textContent = t;
         p.style =
-          'font-size:0.9em;color:#555;line-height:1.2;white-space:nowrap;' +
-          'overflow:hidden;text-overflow:ellipsis;flex:0 0 auto';
+          'font-size:0.9em;color:#555;' +
+          'white-space:nowrap;' +
+          'overflow:hidden;' +
+          'text-overflow:ellipsis;' +
+          'flex-shrink:0;';
+
         c.appendChild(p);
       });
+
+      /* ====== ここが重要 ====== */
+      c.dataset.dayCell = '1';
+      c.dataset.count = String(snip[d]?.length || 0);
+      /* ======================== */
+      if (d === today) {
+        c.dataset.today = '1';
+        applyTodayStyle(c);
+      }
 
       c.onclick = () => jumpToLineId(days[d]);
       gridNode.appendChild(c);
@@ -918,7 +1030,7 @@
       if (/^\[\*{3,}\(&/.test(text)) {
         cur = appendSectionHeader(panelNode, '■ ' + text.replace(/^\[\*+\(&\s*/, '').replace(/\]$/, ''), () => jumpToLineId(line.id));
       } else if (/^\[\*&\s+/.test(text) && cur) {
-        appendTextNode(panelNode, '└ ' + text.replace(/^\[\*&\s*/, '').replace(/\]$/, ''), [Styles.text.item, Styles.list.ellipsis].join(""), () => jumpToLineId(line.id));
+        appendTextNode(panelNode, '└ ' + text.replace(/^\[\*&\s*/, '').replace(/\]$/, ''), [Styles.text.item, Styles.list.ellipsis, 'font-weight:bold;'].join(""), () => jumpToLineId(line.id));
       }
     });
 
@@ -948,6 +1060,7 @@
     const panelNode = getOrCreatePanel(MAIN_PANEL_ID, createMinutesPanel);
     const body = panelNode.querySelector('#' + MAIN_BODY_ID);
 
+    /* ===== Header ===== */
     const headerNode = panelNode.querySelector('#' + MAIN_TITLE_ID);
     headerNode.textContent = '📌 ' + (rawLines[0]?.text || '');
     applyStyle(headerNode, Styles.text.panelTitle);
@@ -956,44 +1069,120 @@
 
     const fragment = document.createDocumentFragment();
 
+    /* ===== 1. session / title 抽出（既存ロジック） ===== */
     const sessions = [];
-    let cur = null;
+    let currentSession = null;
 
-    lines.forEach(line => {
-      // セッション開始（[() 系）
+    lines.forEach((line, idx) => {
       if (isSessionStart(line.text)) {
-        cur = {
+        currentSession = {
           id: line.id,
           title: line.text.replace(/^\[[^\s]+\s*/, '').replace(/\]$/, ''),
-          talks: []
+          talks: [],
+          startIdx: idx,
+          endIdx: null
         };
-        sessions.push(cur);
+        sessions.push(currentSession);
         return;
       }
 
-      // 発表タイトル行
       if (isTitleLine(line.text)) {
-        if (!cur) {
-          cur = { id: line.id, title: '(none)', talks: [] };
-          sessions.push(cur);
+        if (!currentSession) {
+          currentSession = {
+            id: line.id,
+            title: '(none)',
+            talks: [],
+            startIdx: idx,
+            endIdx: null
+          };
+          sessions.push(currentSession);
         }
-        cur.talks.push({ id: line.id, title: cleanTitle(line.text) });
+        currentSession.talks.push({
+          id: line.id,
+          title: cleanTitle(line.text),
+          idx
+        });
       }
     });
 
-    /* --- セッション描画 --- */
-    sessions.forEach(s => {
-      appendSectionHeader(fragment, s.title, () => jumpToLineId(s.id));
-      s.talks.forEach(t => {
-        appendTextNode(fragment, '└ ' + t.title, [Styles.text.item, Styles.list.ellipsis].join(""), () => jumpToLineId(t.id));
+    // session の endIdx を確定
+    sessions.forEach((s, i) => {
+      s.endIdx =
+        i + 1 < sessions.length
+          ? sessions[i + 1].startIdx - 1
+          : lines.length - 1;
+    });
+
+    /* ===== 2. title ごとに質問を収集（session境界を尊重） ===== */
+    const collectQuestions = (start, end) => {
+      const qs = [];
+      const seen = new Set();
+
+      for (let i = start; i <= end; i++) {
+        const text = lines[i].text;
+        if (!/^\?\s+/.test(text)) continue;
+
+        const q = text.replace(/^\?\s+/, '').trim();
+        const key = q.replace(/\s+/g, ' ');
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const author = findAuthorAbove(lines, i);
+        qs.push({ id: lines[i].id, text: q, author });
+      }
+      return qs;
+    };
+
+    sessions.forEach(session => {
+      session.talks.forEach((talk, i) => {
+        const start = talk.idx + 1;
+
+        let end;
+        if (i + 1 < session.talks.length) {
+          end = session.talks[i + 1].idx - 1;
+        } else {
+          end = session.endIdx;
+        }
+
+        talk.questions = collectQuestions(start, end);
       });
     });
 
+    /* ===== 3. 描画（session → title → question） ===== */
+    sessions.forEach(session => {
+      appendSectionHeader(
+        fragment,
+        session.title,
+        () => jumpToLineId(session.id)
+      );
+
+      session.talks.forEach(talk => {
+        appendTextNode(
+          fragment,
+          '└ ' + talk.title,
+          [Styles.text.item, Styles.list.ellipsis, 'font-weight:bold;'].join(''),
+          () => jumpToLineId(talk.id)
+        );
+
+        (talk.questions || []).forEach(q => {
+          appendTextNode(
+            fragment,
+            '　　' + (q.author ? `${q.author}: ` : '?: ') + q.text,
+            [Styles.text.item, Styles.list.ellipsis].join(''),
+            () => jumpToLineId(q.id)
+          );
+        });
+      });
+    });
+
+    /* ===== stats ===== */
+    fragment.appendChild(document.createElement('hr'));
     const statsBlock = createTalkStatsBlock(rawLines);
     if (statsBlock) fragment.appendChild(statsBlock);
 
     body.replaceChildren(fragment);
   };
+
 
   const createTalkStatsBlock = (rawLines) => {
     const { stats, idToName } = buildTalkStats(rawLines);
@@ -1327,10 +1516,9 @@
       questions.forEach(q => {
         appendTextNode(fragment, '・' + (q.author ? `${q.author}: ` : '?: ') + q.text, [Styles.text.item, Styles.list.ellipsis].join(''), () => jumpToLineId(q.id));
       });
-
-      fragment.appendChild(document.createElement('hr'));
     });
 
+    fragment.appendChild(document.createElement('hr'));
     const statsBlock = createTalkStatsBlock(rawLines);
     if (statsBlock) fragment.appendChild(statsBlock);
 
