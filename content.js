@@ -636,7 +636,17 @@
 
   /* ================= 研究ノート：月カレンダー（完全版） ================= */
   const applyTodayStyle = (cell) => {
-    cell.style.boxShadow = 'inset 0 0 0 2px rgba(160,0,0,0.6)';
+    cell.style.boxShadow = 'inset 0 0 0 2px rgba(255,0,0,1)';
+  };
+
+  const applyWeekdayStyle = (cell) => {
+    if (cell.dataset.weekday === 'sun') {
+      cell.style.color = '#c00';   // 赤
+    } else if (cell.dataset.weekday === 'sat') {
+      cell.style.color = '#06c';   // 青
+    } else {
+      cell.style.color = '';
+    }
   };
 
   const createCalendarPanel = (pageName) => {
@@ -725,11 +735,13 @@
 
     /* ========== 曜日行 ========== */
     ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(w => {
-      appendTextNode(
+      const node = appendTextNode(
         gridNode,
         w,
         [Styles.text.sectionTitle, 'text-align:center'].join('')
       );
+      if (w === 'Sun') node.style.color = "#f00";
+      if (w === 'Sat') node.style.color = "#00f";
     });
 
     applyCalendarLayout();
@@ -752,6 +764,7 @@
       ];
 
       cellNode.style.background = COLORS[level];
+      applyWeekdayStyle(cellNode);
     };
     /* ========== Expand トグル ========== */
     const toggleBtn = createButton('[拡大]', () => {
@@ -807,7 +820,7 @@
     );
   };
 
-  const renderCalendarFromLines = (json) => {
+  const renderCalendarFromLines = (pageName, json) => {
     const panelNode = document.getElementById(CALENDAR_ID);
     if (!panelNode) return;
 
@@ -827,6 +840,9 @@
     const days = {}, snip = {};
     let cur = null;
 
+    let year;
+    let month;
+    let day;
     for (const line of json.lines) {
       let text = (line.text || '').trim();
       const mm = text.match(/^\[[\*\(]+\s*(20\d{2})\.(\d{2})\.(\d{2})/);
@@ -834,8 +850,11 @@
         cur = `${mm[1]}.${mm[2]}.${mm[3]}`;
         days[cur] = line.id;
         snip[cur] = [];
+        year = mm[1];
+        month = mm[2];
         continue;
       }
+
       text = text.replace(/\[[^\]]+\.icon\]/g, '').trim();
       if (
         cur &&
@@ -845,7 +864,7 @@
         !text.startsWith('[https://') &&
         !text.startsWith('[[https://') &&
         !text.startsWith('[| ') &&
-        snip[cur].length < 6
+        snip[cur].length < 10
       ) {
         snip[cur].push(text);
       }
@@ -866,13 +885,12 @@
 
     ds.forEach(d => {
       const c = document.createElement('div');
-      c.style =
-        'border:1px solid #ddd;padding:2px;cursor:pointer;' +
-        'display:flex;flex-direction:column;gap:2px;overflow:hidden;min-height: 0';
+      c.style ='border:1px solid #ddd;padding:2px;cursor:pointer;' + 'display:flex;flex-direction:column;gap:2px;overflow:hidden;min-height: 0';
 
       /* 日付 */
       const dd = document.createElement('div');
       dd.textContent = d.split('.').pop();
+      day = d.split('.').pop();
       dd.style = 'font-weight:bold;line-height:1';
       c.appendChild(dd);
 
@@ -880,13 +898,7 @@
       (snip[d] || []).forEach(t => {
         const p = document.createElement('div');
         p.textContent = t;
-        p.style =
-          'font-size:0.9em;color:#555;' +
-          'white-space:nowrap;' +
-          'overflow:hidden;' +
-          'text-overflow:ellipsis;' +
-          'flex-shrink:0;';
-
+        p.style = 'font-size:0.9em;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0;';
         c.appendChild(p);
       });
 
@@ -899,8 +911,47 @@
         applyTodayStyle(c);
       }
 
+      const dateObj = new Date(year, month - 1, day);
+      const weekday = dateObj.getDay();
+      //console.log(year + "/" + month + "/" + day + "(" + weekday);
+      if (weekday === 0) {          // Sunday
+        c.dataset.weekday = 'sun';
+      }
+      if (weekday === 6) {          // Saturday
+        c.dataset.weekday = 'sat';
+      }
+
+      applyWeekdayStyle(c);
       c.onclick = () => jumpToLineId(days[d]);
       gridNode.appendChild(c);
+    });
+
+    loadSettings(currentProjectName, settings => {
+      if (isMyThisMonthResearchNote(pageName, settings.userName)) {
+        const findTodayLine = (lines) => {
+          const now = new Date();
+          const y = now.getFullYear();
+          const m = String(now.getMonth() + 1).padStart(2, '0');
+          const d = String(now.getDate()).padStart(2, '0');
+
+          const today = `${y}.${m}.${d}`;
+          return lines.find(line =>
+            typeof line.text === 'string' &&
+            line.text.includes(today)
+          );
+        };
+        if (location.hash) return;
+
+        // 一度だけジャンプするためのフラグ
+        if (!window.__jumpedToTodayInNote) {
+          const todayLine = findTodayLine(json.lines);
+          if (todayLine) {
+            window.__jumpedToTodayInNote = true;
+            // 描画が落ち着いてから飛ぶ
+            requestAnimationFrame(() => jumpToLineId(todayLine.id));
+          }
+        }
+      }
     });
   };
 
@@ -932,6 +983,17 @@
   const isMyResearchNotePage = (pageName, userName) => {
     if (!pageName || !userName) return false;
     return pageName.includes(`研究ノート_${userName}`);
+  };
+
+  const isMyThisMonthResearchNote = (pageName, userName) => {
+    if (!isMyResearchNotePage(pageName, userName)) return false;
+
+    const m = pageName.match(/(20\d{2})\.(\d{2})/);
+    if (!m) return false;
+    const y = +m[1];
+    const mo = +m[2];
+    const now = new Date();
+    return y === now.getFullYear() && mo === now.getMonth() + 1;
   };
 
   const buildCreateNoteUrl = (project, pageName, body) => {
@@ -1069,7 +1131,7 @@
 
     const fragment = document.createDocumentFragment();
 
-    /* ===== 1. session / title 抽出（既存ロジック） ===== */
+    /* ===== 1. session / title 抽出 ===== */
     const sessions = [];
     let currentSession = null;
 
@@ -1079,6 +1141,7 @@
           id: line.id,
           title: line.text.replace(/^\[[^\s]+\s*/, '').replace(/\]$/, ''),
           talks: [],
+          questions: [],          // ★ 追加
           startIdx: idx,
           endIdx: null
         };
@@ -1092,6 +1155,7 @@
             id: line.id,
             title: '(none)',
             talks: [],
+            questions: [],
             startIdx: idx,
             endIdx: null
           };
@@ -1100,7 +1164,8 @@
         currentSession.talks.push({
           id: line.id,
           title: cleanTitle(line.text),
-          idx
+          idx,
+          questions: []            // ★ title 側にも持たせる
         });
       }
     });
@@ -1113,7 +1178,7 @@
           : lines.length - 1;
     });
 
-    /* ===== 2. title ごとに質問を収集（session境界を尊重） ===== */
+    /* ===== 2. 質問収集 ===== */
     const collectQuestions = (start, end) => {
       const qs = [];
       const seen = new Set();
@@ -1134,27 +1199,49 @@
     };
 
     sessions.forEach(session => {
+      // --- title ごとの質問 ---
       session.talks.forEach((talk, i) => {
         const start = talk.idx + 1;
-
-        let end;
-        if (i + 1 < session.talks.length) {
-          end = session.talks[i + 1].idx - 1;
-        } else {
-          end = session.endIdx;
-        }
+        const end =
+          i + 1 < session.talks.length
+            ? session.talks[i + 1].idx - 1
+            : session.endIdx;
 
         talk.questions = collectQuestions(start, end);
       });
+
+      // --- title が無い区間の質問（session直下） ---
+      if (session.talks.length) {
+        const firstTitleIdx = session.talks[0].idx;
+        session.questions = collectQuestions(
+          session.startIdx + 1,
+          firstTitleIdx - 1
+        );
+      } else {
+        session.questions = collectQuestions(
+          session.startIdx + 1,
+          session.endIdx
+        );
+      }
     });
 
-    /* ===== 3. 描画（session → title → question） ===== */
+    /* ===== 3. 描画 ===== */
     sessions.forEach(session => {
       appendSectionHeader(
         fragment,
         session.title,
         () => jumpToLineId(session.id)
       );
+
+      // session 直下の質問
+      session.questions.forEach(q => {
+        appendTextNode(
+          fragment,
+          '・' + (q.author ? `${q.author}: ` : '?: ') + q.text,
+          [Styles.text.item, Styles.list.ellipsis].join(''),
+          () => jumpToLineId(q.id)
+        );
+      });
 
       session.talks.forEach(talk => {
         appendTextNode(
@@ -1164,7 +1251,7 @@
           () => jumpToLineId(talk.id)
         );
 
-        (talk.questions || []).forEach(q => {
+        talk.questions.forEach(q => {
           appendTextNode(
             fragment,
             '　　' + (q.author ? `${q.author}: ` : '?: ') + q.text,
@@ -1182,6 +1269,7 @@
 
     body.replaceChildren(fragment);
   };
+
 
 
   const createTalkStatsBlock = (rawLines) => {
@@ -1639,7 +1727,7 @@
     onInit: ({ pageName, json }) => {
       loadSettings(currentProjectName, setting => {
         renderCalendar(pageName);
-        renderCalendarFromLines(json);
+        renderCalendarFromLines(pageName, json);
         renderResearchNoteCreateUI({
           setting,
           pageName,
@@ -1650,7 +1738,7 @@
     },
 
     onUpdate: ({ pageName, json }) => {
-      renderCalendarFromLines(json);
+      renderCalendarFromLines(pageName, json);
       renderTodoPanel(json.lines);
     }
   });
