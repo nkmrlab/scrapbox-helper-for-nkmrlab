@@ -7,7 +7,7 @@
   "content_scripts": [
     {
       "matches": ["https://scrapbox.io/*"],
-      "js": ["content.js"]
+      "js": ["content.js"],
     }
   ]
 }
