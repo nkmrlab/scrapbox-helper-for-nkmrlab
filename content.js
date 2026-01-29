@@ -29,7 +29,7 @@
         top:10px;
         right:10px;
         background:#fff;
-        border:1px solid #ccc;
+        border:1px solid #111;
         box-shadow:0 2px 10px rgba(0,0,0,.25);
         z-index:99999;
         font:12px/1.5 sans-serif;
@@ -80,6 +80,16 @@
         padding:6px;
         font-weight:bold;
         border-bottom:1px solid #ddd;
+        background:#555;
+        color: #eee;
+        display:flex;
+        align-items:center;
+        gap:8px;
+      `,
+      headerOld: `
+        padding:6px;
+        font-weight:bold;
+        border-bottom:1px solid #ddd;
         background:#f5f5f5;
         display:flex;
         align-items:center;
@@ -111,26 +121,39 @@
       panelTitle: `
         font-weight:bold;
         font-size:14px;
-        margin-bottom:6px;
+        padding-left:5px;
+        padding-top:3px;
+        padding-bottom:6px;
         cursor:pointer;
+        color: #eee;
+        background: #111;
       `,
-
+      panelTitleOld: `
+        font-weight:bold;
+        font-size:14px;
+        padding-bottom:6px;
+        cursor:pointer;
+        background: #eee;
+      `,
       sectionTitle: `
         font-weight:bold;
         margin:6px 0;
+        border-bottom:1px solid #000;
+        padding-left:5px;
+        padding-top:3px;
+        padding-bottom:3px;
         cursor:pointer;
+        background: #fcc;
       `,
-
       subTitle: `
-        font-weight:bold;
         margin-bottom:4px;
+        padding-bottom:3px;
+        background: #ddf;
       `,
-
       item: `
         cursor:pointer;
         padding-left:6px;
       `,
-
       muted: `
         color:#666;
         font-size:11px;
@@ -293,7 +316,7 @@
   const attachCloseButton = (panelNode, panelId) => {
     const btn = document.createElement('div');
     btn.textContent = '✕';
-    btn.style = `font-weight:bold;position:absolute;top:4px;right:6px;cursor:pointer;font-size:14px;color:#666;`;
+    btn.style = `font-weight:bold;position:absolute;top:4px;right:6px;cursor:pointer;font-size:14px;color:#eee;`;
 
     btn.onclick = () => {
       closedPanels.add(panelId);
@@ -615,11 +638,12 @@
           const panelNode = getOrCreatePanel(
             MAIN_PANEL_ID,
             () => {
-              const p = document.createElement('div');
-              applyStyle(p, Styles.panel.base, Styles.panelMain);
-              applyPanelSettings(p);
-              attachCloseButton(p, MAIN_PANEL_ID);
-              return p;
+              const parent = document.createElement('div');
+              applyStyle(parent, Styles.panel.base, Styles.panelMain);
+              applyPanelSettings(parent);
+              attachCloseButton(parent, MAIN_PANEL_ID);
+              appendPanelTitle(parent, "Project: " + currentProjectName);
+              return parent;
             }
           );
 
@@ -691,7 +715,6 @@
     gridNode.className = CALENDAR_GRID_CLASS;
 
     let calendarExpanded = false;
-
     const applyCalendarFontSize = (gridNode) => {
       loadSettings(currentProjectName, setting => {
         gridNode.style.fontSize = setting.calendarFontSize + 'px';
@@ -713,8 +736,7 @@
         );
 
         // TODO パネルを隠す
-        document.getElementById(TODO_PANEL_ID)
-          ?.style.setProperty('display', 'none');
+        document.getElementById(TODO_PANEL_ID)?.style.setProperty('display', 'none');
       } else {
         applyStyle(
           panelNode,
@@ -738,7 +760,8 @@
       const node = appendTextNode(
         gridNode,
         w,
-        [Styles.text.sectionTitle, 'text-align:center'].join('')
+        //[Styles.text.sectionTitle, 'text-align:center'].join('')
+        ['font-weight:bold;text-align:center;'].join('')
       );
       if (w === 'Sun') node.style.color = "#f00";
       if (w === 'Sat') node.style.color = "#00f";
@@ -746,7 +769,7 @@
 
     applyCalendarLayout();
     /* ========== Heatmap 関数 ========== */
-    panelNode.__applyHeatmap = (cellNode, count) => {
+    panelNode.applyHeatmap = (cellNode, count) => {
       //if (!calendarExpanded) return;
 
       const level =
@@ -776,7 +799,7 @@
       gridNode.querySelectorAll('[data-day-cell]').forEach(c => {
         if (calendarExpanded) {
           const count = Number(c.dataset.count || 0);
-          panelNode.__applyHeatmap(c, count);
+          panelNode.applyHeatmap(c, count);
         } else {
           c.style.background = '';
         }
@@ -1092,7 +1115,7 @@
       if (/^\[\*{3,}\(&/.test(text)) {
         cur = appendSectionHeader(panelNode, '■ ' + text.replace(/^\[\*+\(&\s*/, '').replace(/\]$/, ''), () => jumpToLineId(line.id));
       } else if (/^\[\*&\s+/.test(text) && cur) {
-        appendTextNode(panelNode, '└ ' + text.replace(/^\[\*&\s*/, '').replace(/\]$/, ''), [Styles.text.item, Styles.list.ellipsis, 'font-weight:bold;'].join(""), () => jumpToLineId(line.id));
+        appendTextNode(panelNode, '└ ' + text.replace(/^\[\*&\s*/, '').replace(/\]$/, ''), [Styles.text.item, Styles.list.ellipsis].join(""), () => jumpToLineId(line.id));
       }
     });
 
@@ -1131,17 +1154,20 @@
 
     const fragment = document.createDocumentFragment();
 
-    /* ===== 1. session / title 抽出 ===== */
+    /* =====================================================
+      1. session / title 抽出
+    ===================================================== */
     const sessions = [];
     let currentSession = null;
 
     lines.forEach((line, idx) => {
-      if (isSessionStart(line.text)) {
+      const text = line.text || '';
+
+      if (isSessionStart(text)) {
         currentSession = {
           id: line.id,
-          title: line.text.replace(/^\[[^\s]+\s*/, '').replace(/\]$/, ''),
+          title: text.replace(/^\[[^\s]+\s*/, '').replace(/\]$/, ''),
           talks: [],
-          questions: [],          // ★ 追加
           startIdx: idx,
           endIdx: null
         };
@@ -1149,28 +1175,49 @@
         return;
       }
 
-      if (isTitleLine(line.text)) {
+      if (isTitleLine(text)) {
         if (!currentSession) {
           currentSession = {
             id: line.id,
-            title: '(none)',
+            title: 'comments',
             talks: [],
-            questions: [],
             startIdx: idx,
             endIdx: null
           };
           sessions.push(currentSession);
         }
+
         currentSession.talks.push({
           id: line.id,
-          title: cleanTitle(line.text),
+          title: cleanTitle(text),
           idx,
-          questions: []            // ★ title 側にも持たせる
+          questions: [],
+          impressions: []
         });
       }
     });
 
-    // session の endIdx を確定
+    /* ===== session が無いが title はある場合 ===== */
+    if (sessions.length === 0) {
+      const firstTitleIdx = lines.findIndex(l => isTitleLine(l.text));
+      if (firstTitleIdx !== -1) {
+        sessions.push({
+          id: lines[firstTitleIdx].id,
+          title: 'comments',
+          talks: [{
+            id: lines[firstTitleIdx].id,
+            title: cleanTitle(lines[firstTitleIdx].text),
+            idx: firstTitleIdx,
+            questions: [],
+            impressions: []
+          }],
+          startIdx: 0,
+          endIdx: lines.length - 1
+        });
+      }
+    }
+
+    /* ===== endIdx 確定 ===== */
     sessions.forEach((s, i) => {
       s.endIdx =
         i + 1 < sessions.length
@@ -1178,28 +1225,69 @@
           : lines.length - 1;
     });
 
-    /* ===== 2. 質問収集 ===== */
+    /* =====================================================
+      2. 質問・感想 抽出
+    ===================================================== */
+
+    const isBoundaryLine = (text) =>
+      isSessionStart(text) ||
+      isTitleLine(text) ||
+      extractIconName(text) ||
+      /^\?\s*/.test(text);
+
     const collectQuestions = (start, end) => {
       const qs = [];
       const seen = new Set();
 
       for (let i = start; i <= end; i++) {
-        const text = lines[i].text;
-        if (!/^\?\s+/.test(text)) continue;
+        const t = lines[i].text;
+        if (!/^\?\s+/.test(t)) continue;
 
-        const q = text.replace(/^\?\s+/, '').trim();
+        const q = t.replace(/^\?\s+/, '').trim();
         const key = q.replace(/\s+/g, ' ');
         if (seen.has(key)) continue;
         seen.add(key);
 
-        const author = findAuthorAbove(lines, i);
-        qs.push({ id: lines[i].id, text: q, author });
+        qs.push({
+          id: lines[i].id,
+          text: q,
+          author: findAuthorAbove(lines, i)
+        });
       }
       return qs;
     };
 
+    // ★ 複数行対応の感想収集 ★
+    const collectImpressions = (start, end) => {
+      const ims = [];
+
+      for (let i = start; i <= end; i++) {
+        const author = extractIconName(lines[i]?.text);
+        if (!author) continue;
+
+        const texts = [];
+        let j = i + 1;
+
+        while (j <= end && lines[j]?.text && !isBoundaryLine(lines[j].text)) {
+          texts.push(lines[j].text.trim());
+          j++;
+        }
+
+        if (texts.length) {
+          ims.push({
+            author,
+            text: texts.join(' ')
+          });
+        }
+
+        i = j - 1;
+      }
+
+      return ims;
+    };
+
+    /* ===== 各 session / talk に割り当て ===== */
     sessions.forEach(session => {
-      // --- title ごとの質問 ---
       session.talks.forEach((talk, i) => {
         const start = talk.idx + 1;
         const end =
@@ -1207,25 +1295,32 @@
             ? session.talks[i + 1].idx - 1
             : session.endIdx;
 
-        talk.questions = collectQuestions(start, end);
+        talk.questions   = collectQuestions(start, end);
+        if (OPENAI_API_KEY) {
+          talk.impressions = collectImpressions(start, end);
+        }
       });
 
-      // --- title が無い区間の質問（session直下） ---
-      if (session.talks.length) {
-        const firstTitleIdx = session.talks[0].idx;
-        session.questions = collectQuestions(
-          session.startIdx + 1,
-          firstTitleIdx - 1
-        );
-      } else {
-        session.questions = collectQuestions(
-          session.startIdx + 1,
-          session.endIdx
-        );
+      // ★ title が無い session → 仮想 talk を作る
+      if (session.talks.length === 0) {
+        const ims = collectImpressions(session.startIdx, session.endIdx);
+        const qs  = collectQuestions(session.startIdx, session.endIdx);
+
+        if (ims.length || qs.length) {
+          session.talks.push({
+            id: session.id,
+            title: 'comments',
+            idx: session.startIdx,
+            questions: qs,
+            impressions: ims
+          });
+        }
       }
     });
 
-    /* ===== 3. 描画 ===== */
+    /* =====================================================
+      3. 描画
+    ===================================================== */
     sessions.forEach(session => {
       appendSectionHeader(
         fragment,
@@ -1233,44 +1328,58 @@
         () => jumpToLineId(session.id)
       );
 
-      // session 直下の質問
-      session.questions.forEach(q => {
-        appendTextNode(
-          fragment,
-          '・' + (q.author ? `${q.author}: ` : '?: ') + q.text,
-          [Styles.text.item, Styles.list.ellipsis].join(''),
-          () => jumpToLineId(q.id)
-        );
-      });
-
       session.talks.forEach(talk => {
-        appendTextNode(
+        const titleNode = appendTextNode(
           fragment,
           '└ ' + talk.title,
-          [Styles.text.item, Styles.list.ellipsis, 'font-weight:bold;'].join(''),
+          [Styles.text.item, Styles.list.ellipsis, Styles.text.subTitle].join(''),
           () => jumpToLineId(talk.id)
         );
+
+        // ===== AI 要約 =====
+        if (OPENAI_API_KEY && talk.impressions.length >= 2) {
+          const btn = document.createElement('span');
+          btn.textContent = ' 🧠';
+          btn.style = 'cursor:pointer;color:#888;margin-left:4px';
+
+          btn.onclick = async () => {
+            btn.textContent = ' ⏳';
+            const summary = await summarizeImpressionsByAuthor(talk.impressions);
+            btn.textContent = ' 🧠';
+            if (!summary) return;
+
+            const box = document.createElement('div');
+            box.style = `
+              margin:4px 0 6px 1.5em;
+              padding:4px 6px;
+              background:#f7f7f7;
+              font-size:11px;
+              border-left:3px solid #ccc;
+              white-space:pre-line;
+            `;
+            box.textContent = '🧠 AI要約\n' + summary;
+            titleNode.after(box);
+          };
+
+          titleNode.appendChild(btn);
+        }
 
         talk.questions.forEach(q => {
           appendTextNode(
             fragment,
             '　　' + (q.author ? `${q.author}: ` : '?: ') + q.text,
-            [Styles.text.item, Styles.list.ellipsis].join(''),
+            [Styles.text.item, Styles.list.ellipsis, 'color: #555;'].join(''),
             () => jumpToLineId(q.id)
           );
         });
       });
     });
 
-    /* ===== stats ===== */
-    fragment.appendChild(document.createElement('hr'));
     const statsBlock = createTalkStatsBlock(rawLines);
     if (statsBlock) fragment.appendChild(statsBlock);
 
     body.replaceChildren(fragment);
   };
-
-
 
   const createTalkStatsBlock = (rawLines) => {
     const { stats, idToName } = buildTalkStats(rawLines);
@@ -1303,7 +1412,6 @@
 
         lines.forEach(line => {
           const text = (line.text || '').trim();
-
           const dm = text.match(/^\[\*\(\s*(20\d{2})\.(\d{2})\.(\d{2})/);
           if (dm) {
             currentDate = `${dm[1]}.${dm[2]}.${dm[3]}`;
@@ -1311,22 +1419,12 @@
           }
 
           if (text.includes(setting.todoMark)) {
-            todos.push({
-              id: line.id,
-              text: text.replace(setting.todoMark, '').trim(),
-              date: currentDate,
-              done: false
-            });
+            todos.push({ id: line.id, text: text.replace(setting.todoMark, '').trim(), date: currentDate, done: false });
             return;
           }
 
           if (text.includes(setting.doneMark)) {
-            todos.push({
-              id: line.id,
-              text: text.replace(setting.doneMark, '').trim(),
-              date: currentDate,
-              done: true
-            });
+            todos.push({ id: line.id, text: text.replace(setting.doneMark, '').trim(), date: currentDate, done: true });
           }
         });
 
@@ -1353,11 +1451,7 @@
 
       const createTodoRow = (todo) => {
         const itemNode = document.createElement('div');
-        itemNode.style =
-          'cursor:pointer;padding:4px 6px;' +
-          'border-bottom:1px solid #eee;' +
-          'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
-
+        itemNode.style = 'cursor:pointer;padding:4px 6px;' + 'border-bottom:1px solid #eee;' + 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
         itemNode.textContent = '□ ' + todo.text + (todo.date ? ` (${todo.date})` : '');
 
         if (todo.done) {
@@ -1383,12 +1477,8 @@
 
       let moreLine = null;
       const showCollapsed = () => {
-        activeItems.forEach((x, i) => {
-          x.dom.style.display = i < TODOSHOW ? '' : 'none';
-        });
-        doneItems.forEach(x => {
-          x.dom.style.display = 'none';
-        });
+        activeItems.forEach((x, i) => { x.dom.style.display = i < TODOSHOW ? '' : 'none'; });
+        doneItems.forEach(x => { x.dom.style.display = 'none'; });
         if (moreLine) moreLine.style.display = '';
       };
 
@@ -1606,7 +1696,7 @@
       });
     });
 
-    fragment.appendChild(document.createElement('hr'));
+    //fragment.appendChild(document.createElement('hr'));
     const statsBlock = createTalkStatsBlock(rawLines);
     if (statsBlock) fragment.appendChild(statsBlock);
 
@@ -1689,15 +1779,13 @@
     if (titleId) headerNode.onclick = () => jumpToLineId(titleId);
 
     const fragment = document.createDocumentFragment();
-
     if (questions.length) {
-      appendSectionHeader(fragment, `❓ 質問 (${questions.length})`);
       questions.forEach(q => {
         appendTextNode(fragment, '・' + (q.author ? `${q.author}: ` : '?: ') + q.text, [Styles.text.item, Styles.list.ellipsis].join(''), () => jumpToLineId(q.id));
       });
     }
 
-    fragment.appendChild(document.createElement('hr'));
+    //fragment.appendChild(document.createElement('hr'));
     const statsBlock = createTalkStatsBlock(rawLines);
     if (statsBlock) fragment.appendChild(statsBlock);
 
@@ -1839,12 +1927,9 @@
   };
 
   document.addEventListener('visibilitychange', () => {
-    
     if (document.hidden) {
-      //console.log("stop watchers");
       stopAllWatchers();
     } else {
-      //console.log("start watchers");
       lastURL = null;
       tick();
     }
@@ -1852,4 +1937,55 @@
 
   setInterval(tick, 600);
   tick();
+
+  const OPENAI_API_KEY = null;
+  const callOpenAI = async (prompt, content) => {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-4.1-mini',
+        messages: [
+          { role: 'system', content: prompt },
+          { role: 'user', content }
+        ],
+        temperature: 0.3
+      })
+    });
+
+    const json = await res.json();
+    return json.choices?.[0]?.message?.content || '';
+  };
+
+  const groupByAuthor = (impressions) => {
+    const map = {};
+    impressions.forEach(({ author, text }) => {
+      if (!map[author]) map[author] = [];
+      map[author].push(text);
+    });
+    return map;
+  };
+
+  const SUMMARY_PROMPT = `
+    以下は研究発表に対する参加者ごとの感想です。
+    各参加者について、感想をテンション高く20文字程度で要約してください。
+    形式は「名前: 要約」のみ、改行区切りで出力してください。
+    `;
+
+  const summarizeImpressionsByAuthor = async (impressions) => {
+    if (impressions.length < 2) return null;
+
+    const grouped = groupByAuthor(impressions);
+
+    const input = Object.entries(grouped)
+      .map(([author, texts]) =>
+        `${author}:\n` + texts.map(t => `- ${t}`).join('\n')
+      )
+      .join('\n\n');
+
+    return await callOpenAI(SUMMARY_PROMPT, input);
+  };
 })();
